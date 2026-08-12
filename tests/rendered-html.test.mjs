@@ -43,6 +43,12 @@ test("creates a production build for Picmark Studio", async () => {
   assert.match(page, /onDragStop/);
   assert.match(page, /onResizeStop/);
   assert.match(page, /watermark-rotate-handle/);
+  assert.match(page, /preview-watermark-content/);
+  assert.match(page, /transform: `rotate\(\$\{settings\.angle\}deg\)`/);
+  assert.match(page, /window\.addEventListener\("pointermove"/);
+  assert.match(page, /window\.addEventListener\("pointerup"/);
+  assert.match(page, /onPointerMove=\{updateWatermarkRotation\}/);
+  assert.match(page, /onPointerUp=\{endWatermarkRotation\}/);
   assert.match(page, /拖上方手柄旋转/);
   assert.doesNotMatch(page, /水印文字/);
   assert.match(layout, /Picmark Studio/);

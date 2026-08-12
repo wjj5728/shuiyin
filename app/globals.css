@@ -119,6 +119,7 @@ h1 em { color: var(--coral); font-style: normal; }
 .canvas-frame { position: relative; display: flex; width: 100%; max-height: 515px; align-items: center; justify-content: center; overflow: hidden; border-radius: 12px; background: #edf2ee; touch-action: pan-y; }
 .canvas-frame > .source-image { width: 100%; height: 100%; object-fit: contain; }
 .preview-watermark-shell { z-index: 2; overflow: visible !important; }
+.preview-watermark-content { width: 100%; height: 100%; }
 .preview-watermark { display: block; width: 100%; height: 100%; object-fit: contain; pointer-events: none; user-select: none; }
 .watermark-resize-handle { width: 22px !important; height: 22px !important; right: -11px !important; bottom: -11px !important; border: 3px solid #fff; border-radius: 50%; background: var(--coral); box-shadow: 0 2px 8px rgb(20 32 38 / 25%); cursor: nwse-resize; touch-action: none; }
 .watermark-rotate-handle { position: absolute; z-index: 3; top: -34px; left: 50%; display: grid; width: 26px; height: 26px; place-items: center; padding: 0; border: 3px solid #fff; border-radius: 50%; color: #fff; background: var(--teal); box-shadow: 0 2px 8px rgb(20 32 38 / 25%); cursor: grab; font-size: 15px; line-height: 1; transform: translateX(-50%); touch-action: none; }

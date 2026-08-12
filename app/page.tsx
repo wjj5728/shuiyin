@@ -342,10 +342,9 @@ export default function Home() {
       startPointerAngle: pointerAngle(event.clientX, event.clientY, centerX, centerY),
       startRotation: settings.angle,
     };
-    event.currentTarget.setPointerCapture(event.pointerId);
   };
 
-  const moveWatermarkRotation = (event: ReactPointerEvent<HTMLButtonElement>) => {
+  const updateWatermarkRotation = (event: ReactPointerEvent<HTMLButtonElement> | PointerEvent) => {
     const interaction = rotationInteractionRef.current;
     if (!interaction || interaction.pointerId !== event.pointerId) return;
 
@@ -363,13 +362,29 @@ export default function Home() {
     setSettings((current) => ({ ...current, angle: Math.round(nextRotation) }));
   };
 
-  const endWatermarkRotation = (event: ReactPointerEvent<HTMLButtonElement>) => {
+  const endWatermarkRotation = (event: ReactPointerEvent<HTMLButtonElement> | PointerEvent) => {
     if (rotationInteractionRef.current?.pointerId !== event.pointerId) return;
     rotationInteractionRef.current = null;
-    if (event.currentTarget.hasPointerCapture(event.pointerId)) {
-      event.currentTarget.releasePointerCapture(event.pointerId);
-    }
   };
+
+  useEffect(() => {
+    const handleWindowPointerMove = (event: PointerEvent) => {
+      updateWatermarkRotation(event);
+    };
+
+    const handleWindowPointerEnd = (event: PointerEvent) => {
+      endWatermarkRotation(event);
+    };
+
+    window.addEventListener("pointermove", handleWindowPointerMove, { passive: false });
+    window.addEventListener("pointerup", handleWindowPointerEnd);
+    window.addEventListener("pointercancel", handleWindowPointerEnd);
+    return () => {
+      window.removeEventListener("pointermove", handleWindowPointerMove);
+      window.removeEventListener("pointerup", handleWindowPointerEnd);
+      window.removeEventListener("pointercancel", handleWindowPointerEnd);
+    };
+  }, []);
 
   const toggleItem = (id: string) => {
     setItems((current) =>
@@ -665,12 +680,17 @@ export default function Home() {
                   enableResizing={{ bottomRight: true }}
                   resizeHandleClasses={{ bottomRight: "watermark-resize-handle" }}
                   cancel=".watermark-resize-handle, .watermark-rotate-handle"
-                  style={{ opacity: settings.opacity / 100, transform: `rotate(${settings.angle}deg)`, transformOrigin: "center", touchAction: "none" }}
+                  style={{ opacity: settings.opacity / 100, touchAction: "none" }}
                   onDragStop={handleWatermarkDrag}
                   onResizeStop={handleWatermarkResize}
                 >
-                  <img className="preview-watermark" src={watermark.url} alt="当前水印" draggable={false} />
-                  <button type="button" className="watermark-rotate-handle" aria-label="拖动旋转水印" onPointerDown={beginWatermarkRotation} onPointerMove={moveWatermarkRotation} onPointerUp={endWatermarkRotation} onPointerCancel={endWatermarkRotation}>↻</button>
+                  <div
+                    className="preview-watermark-content"
+                    style={{ transform: `rotate(${settings.angle}deg)`, transformOrigin: "center" }}
+                  >
+                    <img className="preview-watermark" src={watermark.url} alt="当前水印" draggable={false} />
+                  </div>
+                  <button type="button" className="watermark-rotate-handle" aria-label="拖动旋转水印" onPointerDown={beginWatermarkRotation} onPointerMove={updateWatermarkRotation} onPointerUp={endWatermarkRotation} onPointerCancel={endWatermarkRotation}>↻</button>
                 </Rnd>}<div className="frame-badge">预览</div></div>}
                 <div className="stage-footer"><span>{activeItem?.file.name}</span><span>{activeItem ? `${activeItem.width} × ${activeItem.height} · ${formatBytes(activeItem.file.size)}` : ""}</span></div>
               </div>
