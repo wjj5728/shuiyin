@@ -18,8 +18,12 @@ test("creates a production build for Picmark Studio", async () => {
   assert.match(page, /name="images"/);
   assert.match(page, /multiple/);
   assert.match(page, /可多选/);
+  assert.match(page, /onDragStop/);
+  assert.match(page, /onResizeStop/);
+  assert.match(page, /拖拽右下角手柄缩放/);
   assert.doesNotMatch(page, /水印文字/);
   assert.match(layout, /Picmark Studio/);
+  assert.match(packageJson, /"react-rnd":/);
   assert.match(packageJson, /"next": "16\.3\.0"/);
   assert.doesNotMatch(packageJson, /vinext|wrangler|drizzle|cloudflare/);
 });

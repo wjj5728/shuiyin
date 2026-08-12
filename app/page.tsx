@@ -1,18 +1,8 @@
 "use client";
 
-import type { CSSProperties, ChangeEvent, DragEvent } from "react";
-import { useMemo, useRef, useState } from "react";
-
-type Position =
-  | "top-left"
-  | "top-center"
-  | "top-right"
-  | "middle-left"
-  | "middle-center"
-  | "middle-right"
-  | "bottom-left"
-  | "bottom-center"
-  | "bottom-right";
+import { Rnd } from "react-rnd";
+import type { ChangeEvent, DragEvent } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 
 type ImageItem = {
   id: string;
@@ -34,27 +24,17 @@ type Settings = {
   size: number;
   opacity: number;
   angle: number;
-  position: Position;
+  x: number;
+  y: number;
 };
 
 const initialSettings: Settings = {
   size: 28,
   opacity: 62,
   angle: -18,
-  position: "bottom-right",
+  x: 78,
+  y: 80,
 };
-
-const positionMap: Array<{ key: Position; label: string }> = [
-  { key: "top-left", label: "左上" },
-  { key: "top-center", label: "上中" },
-  { key: "top-right", label: "右上" },
-  { key: "middle-left", label: "左中" },
-  { key: "middle-center", label: "正中" },
-  { key: "middle-right", label: "右中" },
-  { key: "bottom-left", label: "左下" },
-  { key: "bottom-center", label: "下中" },
-  { key: "bottom-right", label: "右下" },
-];
 
 function formatBytes(bytes: number) {
   if (bytes < 1024 * 1024) return `${Math.max(1, Math.round(bytes / 1024))} KB`;
@@ -63,6 +43,10 @@ function formatBytes(bytes: number) {
 
 function formatAngle(angle: number) {
   return `${angle > 0 ? "+" : ""}${angle}°`;
+}
+
+function clamp(value: number, min: number, max: number) {
+  return Math.min(Math.max(value, min), max);
 }
 
 function loadImageAsset(file: File): Promise<Omit<WatermarkImage, "file">> {
@@ -83,22 +67,6 @@ function loadImageAsset(file: File): Promise<Omit<WatermarkImage, "file">> {
   });
 }
 
-function watermarkStyle(settings: Settings): CSSProperties {
-  const [vertical, horizontal] = settings.position.split("-") as [
-    "top" | "middle" | "bottom",
-    "left" | "center" | "right",
-  ];
-  const style: CSSProperties = {
-    width: `${settings.size}%`,
-    opacity: settings.opacity / 100,
-    transform: `translate(${horizontal === "left" ? "0" : horizontal === "right" ? "-100%" : "-50%"}, ${vertical === "top" ? "0" : vertical === "bottom" ? "-100%" : "-50%"}) rotate(${settings.angle}deg)`,
-  };
-
-  style.left = horizontal === "left" ? "7%" : horizontal === "right" ? "93%" : "50%";
-  style.top = vertical === "top" ? "7%" : vertical === "bottom" ? "93%" : "50%";
-  return style;
-}
-
 export default function Home() {
   const [items, setItems] = useState<ImageItem[]>([]);
   const [watermark, setWatermark] = useState<WatermarkImage | null>(null);
@@ -110,12 +78,27 @@ export default function Home() {
   const [notice, setNotice] = useState("准备好了，拖入图片开始编辑");
   const fileInputRef = useRef<HTMLInputElement>(null);
   const watermarkInputRef = useRef<HTMLInputElement>(null);
+  const canvasFrameRef = useRef<HTMLDivElement>(null);
+  const [frameSize, setFrameSize] = useState({ width: 0, height: 0 });
 
   const activeItem = useMemo(
     () => items.find((item) => item.id === activeId) ?? items[0] ?? null,
     [activeId, items],
   );
   const selectedItems = useMemo(() => items.filter((item) => item.selected), [items]);
+
+  useEffect(() => {
+    const element = canvasFrameRef.current;
+    if (!element) return;
+
+    const updateFrameSize = () =>
+      setFrameSize({ width: element.clientWidth, height: element.clientHeight });
+    updateFrameSize();
+
+    const observer = new ResizeObserver(updateFrameSize);
+    observer.observe(element);
+    return () => observer.disconnect();
+  }, [activeItem?.id]);
 
   const showNotice = (message: string) => {
     setNotice(message);
@@ -209,6 +192,43 @@ export default function Home() {
     setSettings((current) => ({ ...current, [key]: value }));
   };
 
+  const renderedWatermarkSize = useMemo(() => {
+    if (!watermark || !frameSize.width || !frameSize.height) return null;
+    const width = (frameSize.width * settings.size) / 100;
+    return {
+      width,
+      height: width * (watermark.height / watermark.width),
+    };
+  }, [frameSize, settings.size, watermark]);
+
+  const updateWatermarkPosition = (x: number, y: number, width = renderedWatermarkSize?.width, height = renderedWatermarkSize?.height) => {
+    if (!frameSize.width || !frameSize.height || !width || !height) return;
+    const halfWidth = (width / frameSize.width) * 50;
+    const halfHeight = (height / frameSize.height) * 50;
+    setSettings((current) => ({
+      ...current,
+      x: clamp((x + width / 2) / frameSize.width * 100, halfWidth, 100 - halfWidth),
+      y: clamp((y + height / 2) / frameSize.height * 100, halfHeight, 100 - halfHeight),
+    }));
+  };
+
+  const handleWatermarkDrag = (_event: unknown, data: { x: number; y: number }) => {
+    updateWatermarkPosition(data.x, data.y);
+  };
+
+  const handleWatermarkResize = (
+    _event: unknown,
+    _direction: unknown,
+    elementRef: HTMLElement,
+    _delta: unknown,
+    position: { x: number; y: number },
+  ) => {
+    if (!frameSize.width) return;
+    const nextSize = (elementRef.offsetWidth / frameSize.width) * 100;
+    setSettings((current) => ({ ...current, size: nextSize }));
+    updateWatermarkPosition(position.x, position.y, elementRef.offsetWidth, elementRef.offsetHeight);
+  };
+
   const toggleItem = (id: string) => {
     setItems((current) =>
       current.map((item) => (item.id === id ? { ...item, selected: !item.selected } : item)),
@@ -257,34 +277,17 @@ export default function Home() {
       watermarkImage.onerror = () => reject(new Error("watermark-load-failed"));
     });
 
-    const margin = Math.max(24, Math.round(Math.min(item.width, item.height) * 0.07));
-    const maxWidth = Math.max(1, item.width - margin * 2);
-    const watermarkWidth = Math.min(
-      maxWidth,
-      Math.max(1, Math.round(item.width * (settings.size / 100))),
-    );
+    const watermarkWidth = Math.max(1, Math.round(item.width * (settings.size / 100)));
     const watermarkHeight = Math.max(
       1,
       Math.round(watermarkWidth * (watermark.height / watermark.width)),
     );
     context.globalAlpha = settings.opacity / 100;
 
-    const [vertical, horizontal] = settings.position.split("-") as [
-      "top" | "middle" | "bottom",
-      "left" | "center" | "right",
-    ];
-    const x = horizontal === "left"
-      ? margin
-      : horizontal === "right"
-        ? item.width - margin - watermarkWidth
-        : (item.width - watermarkWidth) / 2;
-    const y = vertical === "top"
-      ? margin
-      : vertical === "bottom"
-        ? item.height - margin - watermarkHeight
-        : (item.height - watermarkHeight) / 2;
+    const x = (item.width * settings.x) / 100;
+    const y = (item.height * settings.y) / 100;
     context.save();
-    context.translate(x + watermarkWidth / 2, y + watermarkHeight / 2);
+    context.translate(x, y);
     context.rotate((settings.angle * Math.PI) / 180);
     context.drawImage(
       watermarkImage,
@@ -430,7 +433,7 @@ export default function Home() {
 
           <div className="control-block">
             <div className="control-row"><label htmlFor="size">大小</label><output>{settings.size}%</output></div>
-            <input id="size" className="range-input" type="range" min="8" max="64" value={settings.size} onChange={(event) => updateSettings("size", Number(event.target.value))} />
+            <input id="size" className="range-input" type="range" min="8" max="90" value={settings.size} onChange={(event) => updateSettings("size", Number(event.target.value))} />
             <div className="range-hints"><span>小</span><span>大</span></div>
           </div>
 
@@ -447,14 +450,8 @@ export default function Home() {
           </div>
 
           <div className="control-block position-block">
-            <div className="control-row"><span>位置</span><output>{positionMap.find((item) => item.key === settings.position)?.label}</output></div>
-            <div className="position-grid" role="radiogroup" aria-label="水印位置">
-              {positionMap.map((item) => (
-                <button key={item.key} type="button" className={settings.position === item.key ? "position-btn is-active" : "position-btn"} onClick={() => updateSettings("position", item.key)} aria-label={item.label} aria-pressed={settings.position === item.key}>
-                  <span />
-                </button>
-              ))}
-            </div>
+            <div className="control-row"><span>位置</span><output>{Math.round(settings.x)}% · {Math.round(settings.y)}%</output></div>
+            <p className="position-hint">直接拖动预览中的水印移动位置，拖拽右下角手柄缩放。</p>
           </div>
 
           <div className="privacy-card"><span className="privacy-icon">✦</span><div><strong>你的文件不会被上传</strong><p>所有图片处理都在当前设备完成。</p></div></div>
@@ -478,7 +475,26 @@ export default function Home() {
           ) : (
             <div className="preview-layout">
               <div className="preview-stage">
-                {activeItem && <div className="canvas-frame" style={{ aspectRatio: `${activeItem.width} / ${activeItem.height}` }}><img className="source-image" src={activeItem.url} alt={activeItem.file.name} />{watermark && <img className="preview-watermark" src={watermark.url} alt="" style={watermarkStyle(settings)} />}<div className="frame-badge">预览</div></div>}
+                {activeItem && <div ref={canvasFrameRef} className="canvas-frame" style={{ aspectRatio: `${activeItem.width} / ${activeItem.height}` }}><img className="source-image" src={activeItem.url} alt={activeItem.file.name} />{watermark && renderedWatermarkSize && <Rnd
+                  className="preview-watermark-shell"
+                  bounds="parent"
+                  size={renderedWatermarkSize}
+                  position={{
+                    x: (frameSize.width * settings.x) / 100 - renderedWatermarkSize.width / 2,
+                    y: (frameSize.height * settings.y) / 100 - renderedWatermarkSize.height / 2,
+                  }}
+                  minWidth={frameSize.width * 0.08}
+                  maxWidth={frameSize.width * 0.9}
+                  lockAspectRatio={watermark.width / watermark.height}
+                  enableResizing={{ bottomRight: true }}
+                  resizeHandleClasses={{ bottomRight: "watermark-resize-handle" }}
+                  cancel=".watermark-resize-handle"
+                  style={{ opacity: settings.opacity / 100, transform: `rotate(${settings.angle}deg)`, transformOrigin: "center", touchAction: "none" }}
+                  onDragStop={handleWatermarkDrag}
+                  onResizeStop={handleWatermarkResize}
+                >
+                  <img className="preview-watermark" src={watermark.url} alt="当前水印" draggable={false} />
+                </Rnd>}<div className="frame-badge">预览</div></div>}
                 <div className="stage-footer"><span>{activeItem?.file.name}</span><span>{activeItem ? `${activeItem.width} × ${activeItem.height} · ${formatBytes(activeItem.file.size)}` : ""}</span></div>
               </div>
               <div className="thumb-strip">
