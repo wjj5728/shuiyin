@@ -76,7 +76,8 @@ h1 em { color: var(--coral); font-style: normal; }
 .preset-toggle b { min-width: 15px; padding: 2px 4px; border-radius: 99px; color: #fff; background: var(--coral); font: 9px var(--font-geist-mono), monospace; }
 .watermark-presets { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; margin-top: 10px; }
 .watermark-preset-card { min-width: 0; padding: 5px; border: 1px solid #dce7e1; border-radius: 8px; color: #647470; background: #fff; font-size: 9px; text-align: left; }
-.watermark-preset-card:hover, .watermark-preset-card:focus-visible { border-color: var(--coral); outline: none; box-shadow: 0 0 0 2px rgb(255 117 93 / 12%); }
+.watermark-preset-card:hover, .watermark-preset-card:focus-visible, .watermark-preset-card.is-selected { border-color: var(--coral); outline: none; box-shadow: 0 0 0 2px rgb(255 117 93 / 12%); }
+.watermark-preset-card.is-selected { color: var(--teal); background: #fff8f5; }
 .watermark-preset-thumb { display: block; width: 100%; height: 58px; overflow: hidden; border-radius: 5px; background: repeating-conic-gradient(#f1f5f2 0 25%, #fff 0 50%) 50% / 10px 10px; }
 .watermark-preset-thumb img { width: 100%; height: 100%; object-fit: contain; }
 .watermark-preset-card > span:last-child { display: block; margin-top: 5px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }

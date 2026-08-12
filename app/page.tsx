@@ -149,6 +149,7 @@ export default function Home() {
   const watermarkInputRef = useRef<HTMLInputElement>(null);
   const canvasFrameRef = useRef<HTMLDivElement>(null);
   const rotationInteractionRef = useRef<RotationInteraction | null>(null);
+  const watermarkLoadIdRef = useRef(0);
   const [frameSize, setFrameSize] = useState({ width: 0, height: 0 });
 
   const activeItem = useMemo(
@@ -210,8 +211,14 @@ export default function Home() {
   };
 
   const applyWatermarkFile = async (file: File, message: string) => {
+    const loadId = watermarkLoadIdRef.current + 1;
+    watermarkLoadIdRef.current = loadId;
     try {
       const loaded = await loadImageAsset(file);
+      if (loadId !== watermarkLoadIdRef.current) {
+        URL.revokeObjectURL(loaded.url);
+        return;
+      }
       setWatermark((current) => {
         if (current) URL.revokeObjectURL(current.url);
         return { ...loaded, file };
@@ -270,6 +277,7 @@ export default function Home() {
   };
 
   const clearWatermark = () => {
+    watermarkLoadIdRef.current += 1;
     setWatermark((current) => {
       if (current) URL.revokeObjectURL(current.url);
       return null;
@@ -576,7 +584,7 @@ export default function Home() {
               {showWatermarkPresets ? "收起本地水印" : "选择本地水印"}
               <b>{watermarkPresets.length}</b>
             </button>
-            <small>也可以上传自己的图片</small>
+            <small>{watermark ? "点击素材会替换当前水印" : "选择后会直接显示在图片上"}</small>
           </div>
 
           {showWatermarkPresets && (
@@ -585,7 +593,8 @@ export default function Home() {
                 <button
                   key={preset.src}
                   type="button"
-                  className="watermark-preset-card"
+                  className={`watermark-preset-card${watermark?.file.name === preset.fileName ? " is-selected" : ""}`}
+                  aria-pressed={watermark?.file.name === preset.fileName}
                   onClick={() => void selectWatermarkPreset(preset)}
                 >
                   <span className="watermark-preset-thumb">
@@ -642,6 +651,7 @@ export default function Home() {
             <div className="preview-layout">
               <div className="preview-stage">
                 {activeItem && <div ref={canvasFrameRef} className="canvas-frame" style={{ aspectRatio: `${activeItem.width} / ${activeItem.height}` }}><img className="source-image" src={activeItem.url} alt={activeItem.file.name} />{watermark && renderedWatermarkSize && <Rnd
+                  key={watermark.url}
                   className="preview-watermark-shell"
                   bounds="parent"
                   size={renderedWatermarkSize}

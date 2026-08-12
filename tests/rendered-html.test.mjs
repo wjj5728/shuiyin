@@ -34,6 +34,9 @@ test("creates a production build for Picmark Studio", async () => {
   assert.match(page, /watermarks\/sold-blue-bubble\.png/);
   assert.match(page, /watermarks\/sold-purple-diamond\.png/);
   assert.match(page, /watermarks\/sold-orange-banner\.png/);
+  assert.match(page, /点击素材会替换当前水印/);
+  assert.match(page, /key=\{watermark\.url\}/);
+  assert.match(page, /aria-pressed=\{watermark\?\.file\.name === preset\.fileName\}/);
   assert.match(page, /name="images"/);
   assert.match(page, /multiple/);
   assert.match(page, /可多选/);
