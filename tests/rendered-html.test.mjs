@@ -5,6 +5,10 @@ import test from "node:test";
 test("creates a production build for Picmark Studio", async () => {
   await Promise.all([
     access(new URL("../.next/BUILD_ID", import.meta.url)),
+    access(new URL("../public/manifest.webmanifest", import.meta.url)),
+    access(new URL("../public/sw.js", import.meta.url)),
+    access(new URL("../public/icon-192.png", import.meta.url)),
+    access(new URL("../public/icon-512.png", import.meta.url)),
     access(new URL("../public/watermarks/stamp-red.png", import.meta.url)),
     access(new URL("../public/watermarks/sold-red.png", import.meta.url)),
     access(new URL("../public/watermarks/sold-blue.png", import.meta.url)),
@@ -34,6 +38,9 @@ test("creates a production build for Picmark Studio", async () => {
   assert.match(page, /watermarks\/sold-blue-bubble\.png/);
   assert.match(page, /watermarks\/sold-purple-diamond\.png/);
   assert.match(page, /watermarks\/sold-orange-banner\.png/);
+  assert.match(page, /navigator\.serviceWorker\.register\("\/sw\.js"/);
+  assert.match(page, /beforeinstallprompt/);
+  assert.match(page, /安装到桌面/);
   assert.match(page, /点击素材会替换当前水印/);
   assert.match(page, /key=\{watermark\.url\}/);
   assert.match(page, /aria-pressed=\{watermark\?\.file\.name === preset\.fileName\}/);

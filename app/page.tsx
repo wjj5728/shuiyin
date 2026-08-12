@@ -38,6 +38,11 @@ type RotationInteraction = {
   startRotation: number;
 };
 
+type BeforeInstallPromptEvent = Event & {
+  prompt: () => Promise<void>;
+  userChoice: Promise<{ outcome: "accepted" | "dismissed" }>;
+};
+
 const initialSettings: Settings = {
   size: 28,
   opacity: 62,
@@ -162,6 +167,10 @@ export default function Home() {
   const [showWatermarkPresets, setShowWatermarkPresets] = useState(false);
   const [isDownloading, setIsDownloading] = useState(false);
   const [notice, setNotice] = useState("准备好了，拖入图片开始编辑");
+  const [showInstallCard, setShowInstallCard] = useState(false);
+  const [installHelpOpen, setInstallHelpOpen] = useState(false);
+  const [isIos, setIsIos] = useState(false);
+  const [installPromptEvent, setInstallPromptEvent] = useState<BeforeInstallPromptEvent | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const watermarkInputRef = useRef<HTMLInputElement>(null);
   const canvasFrameRef = useRef<HTMLDivElement>(null);
@@ -182,6 +191,43 @@ export default function Home() {
   }, [activeItem?.id]);
 
   useEffect(() => {
+    const standalone = window.matchMedia("(display-mode: standalone)").matches
+      || (navigator as Navigator & { standalone?: boolean }).standalone === true;
+    const mobile = window.matchMedia("(max-width: 600px)").matches
+      || /Android|iPhone|iPad|iPod/i.test(navigator.userAgent);
+    const ios = /iPhone|iPad|iPod/i.test(navigator.userAgent)
+      || (navigator.platform === "MacIntel" && navigator.maxTouchPoints > 1);
+    const iosTimer = window.setTimeout(() => setIsIos(ios), 0);
+
+    if ("serviceWorker" in navigator) {
+      void navigator.serviceWorker.register("/sw.js", { scope: "/" }).catch(() => undefined);
+    }
+
+    const handleBeforeInstallPrompt = (event: Event) => {
+      event.preventDefault();
+      setInstallPromptEvent(event as BeforeInstallPromptEvent);
+      if (mobile && !standalone) setShowInstallCard(true);
+    };
+    const handleAppInstalled = () => {
+      setInstallPromptEvent(null);
+      setShowInstallCard(false);
+    };
+
+    window.addEventListener("beforeinstallprompt", handleBeforeInstallPrompt);
+    window.addEventListener("appinstalled", handleAppInstalled);
+    const timer = mobile && !standalone
+      ? window.setTimeout(() => setShowInstallCard(true), 900)
+      : undefined;
+
+    return () => {
+      window.removeEventListener("beforeinstallprompt", handleBeforeInstallPrompt);
+      window.removeEventListener("appinstalled", handleAppInstalled);
+      if (timer) window.clearTimeout(timer);
+      window.clearTimeout(iosTimer);
+    };
+  }, []);
+
+  useEffect(() => {
     const element = canvasFrameRef.current;
     if (!element) return;
 
@@ -197,6 +243,25 @@ export default function Home() {
   const showNotice = (message: string) => {
     setNotice(message);
     window.setTimeout(() => setNotice("浏览器本地处理 · 不上传服务器"), 3200);
+  };
+
+  const installApp = async () => {
+    if (installHelpOpen) {
+      setShowInstallCard(false);
+      setInstallHelpOpen(false);
+      return;
+    }
+
+    if (!installPromptEvent) {
+      setInstallHelpOpen(true);
+      return;
+    }
+
+    await installPromptEvent.prompt();
+    await installPromptEvent.userChoice;
+    setInstallPromptEvent(null);
+    setShowInstallCard(false);
+    setInstallHelpOpen(false);
   };
 
   const addFiles = async (fileList: FileList | File[]) => {
@@ -562,6 +627,27 @@ export default function Home() {
 
   return (
     <main className="app-shell">
+      {showInstallCard && (
+        <aside className="install-card" role="dialog" aria-label="安装 Picmark Studio">
+          <div className="install-card-icon" aria-hidden="true">＋</div>
+          <div className="install-card-copy">
+            <strong>安装到桌面</strong>
+            <p>
+              {installHelpOpen
+                ? isIos
+                  ? "点击浏览器的分享按钮，再选择“添加到主屏幕”。"
+                  : "打开浏览器菜单，选择“安装应用”或“添加到主屏幕”。"
+                : "下次打开更快，离线也能继续使用。"}
+            </p>
+          </div>
+          <div className="install-card-actions">
+            <button type="button" className="install-button" onClick={() => void installApp()}>
+              {installHelpOpen ? "知道了" : installPromptEvent ? "立即安装" : "查看方法"}
+            </button>
+            <button type="button" className="install-dismiss" onClick={() => setShowInstallCard(false)}>稍后</button>
+          </div>
+        </aside>
+      )}
       <header className="topbar">
         <div className="brand-lockup">
           <div className="brand-mark" aria-hidden="true"><span /><span /></div>

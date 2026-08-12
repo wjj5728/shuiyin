@@ -19,6 +19,16 @@ button, input { font: inherit; }
 button { cursor: pointer; }
 button:disabled { cursor: not-allowed; opacity: .48; }
 
+.install-card { position: fixed; z-index: 20; right: 18px; bottom: 18px; display: flex; max-width: min(390px, calc(100vw - 36px)); align-items: center; gap: 11px; padding: 12px; border: 1px solid #c9e2d5; border-radius: 13px; background: rgb(255 255 255 / 96%); box-shadow: 0 16px 40px rgb(20 32 38 / 18%); backdrop-filter: blur(12px); }
+.install-card-icon { display: grid; width: 34px; height: 34px; flex: 0 0 auto; place-items: center; border-radius: 10px; color: #fff; background: var(--coral); font-size: 22px; }
+.install-card-copy { min-width: 0; flex: 1; }
+.install-card-copy strong { display: block; color: var(--ink); font-size: 11px; }
+.install-card-copy p { margin-top: 4px; color: #71817b; font-size: 10px; line-height: 1.45; }
+.install-card-actions { display: flex; flex: 0 0 auto; flex-direction: column; align-items: stretch; gap: 5px; }
+.install-button, .install-dismiss { border-radius: 6px; font-size: 10px; white-space: nowrap; }
+.install-button { padding: 7px 10px; border: 0; color: #fff; background: var(--teal); }
+.install-dismiss { padding: 3px 5px; border: 0; color: #94a29d; background: transparent; }
+
 .app-shell { width: min(1440px, 100%); margin: 0 auto; padding: 0 clamp(22px, 5.4vw, 78px) 28px; }
 .topbar { height: 83px; display: flex; align-items: center; justify-content: space-between; border-bottom: 1px solid var(--line); }
 .brand-lockup, .topbar-center, .top-help, .brand-name { display: flex; align-items: center; }
@@ -192,6 +202,7 @@ h1 em { color: var(--coral); font-style: normal; }
   .secondary-button, .download-button { flex: 1; }
   .page-footer { flex-wrap: wrap; gap: 8px 18px; font-size: 8px; }
   .page-footer span:last-child { width: 100%; }
+  .install-card { right: 12px; bottom: max(12px, env(safe-area-inset-bottom)); left: 12px; max-width: none; }
 }
 
 @media (max-width: 390px) {
