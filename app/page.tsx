@@ -23,22 +23,25 @@ type ImageItem = {
   selected: boolean;
 };
 
+type WatermarkImage = {
+  file: File;
+  url: string;
+  width: number;
+  height: number;
+};
+
 type Settings = {
-  text: string;
   size: number;
   opacity: number;
   angle: number;
   position: Position;
-  color: "dark" | "light";
 };
 
 const initialSettings: Settings = {
-  text: "© 你的品牌名",
   size: 28,
   opacity: 62,
   angle: -18,
   position: "bottom-right",
-  color: "light",
 };
 
 const positionMap: Array<{ key: Position; label: string }> = [
@@ -62,15 +65,32 @@ function formatAngle(angle: number) {
   return `${angle > 0 ? "+" : ""}${angle}°`;
 }
 
+function loadImageAsset(file: File): Promise<Omit<WatermarkImage, "file">> {
+  return new Promise((resolve, reject) => {
+    const url = URL.createObjectURL(file);
+    const image = new Image();
+    image.onload = () =>
+      resolve({
+        url,
+        width: image.naturalWidth,
+        height: image.naturalHeight,
+      });
+    image.onerror = () => {
+      URL.revokeObjectURL(url);
+      reject(new Error("image-load-failed"));
+    };
+    image.src = url;
+  });
+}
+
 function watermarkStyle(settings: Settings): CSSProperties {
   const [vertical, horizontal] = settings.position.split("-") as [
     "top" | "middle" | "bottom",
     "left" | "center" | "right",
   ];
   const style: CSSProperties = {
-    color: settings.color === "light" ? "#fff" : "#121518",
+    width: `${settings.size}%`,
     opacity: settings.opacity / 100,
-    fontSize: `clamp(12px, ${settings.size / 4.2}vw, ${settings.size}px)`,
     transform: `translate(${horizontal === "left" ? "0" : horizontal === "right" ? "-100%" : "-50%"}, ${vertical === "top" ? "0" : vertical === "bottom" ? "-100%" : "-50%"}) rotate(${settings.angle}deg)`,
   };
 
@@ -81,12 +101,15 @@ function watermarkStyle(settings: Settings): CSSProperties {
 
 export default function Home() {
   const [items, setItems] = useState<ImageItem[]>([]);
+  const [watermark, setWatermark] = useState<WatermarkImage | null>(null);
   const [activeId, setActiveId] = useState<string | null>(null);
   const [settings, setSettings] = useState<Settings>(initialSettings);
   const [isDragging, setIsDragging] = useState(false);
+  const [isWatermarkDragging, setIsWatermarkDragging] = useState(false);
   const [isDownloading, setIsDownloading] = useState(false);
   const [notice, setNotice] = useState("准备好了，拖入图片开始编辑");
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const watermarkInputRef = useRef<HTMLInputElement>(null);
 
   const activeItem = useMemo(
     () => items.find((item) => item.id === activeId) ?? items[0] ?? null,
@@ -106,33 +129,50 @@ export default function Home() {
       return;
     }
 
-    const loaded = await Promise.all(
-      imageFiles.map(
-        (file) =>
-          new Promise<ImageItem>((resolve, reject) => {
-            const url = URL.createObjectURL(file);
-            const image = new Image();
-            image.onload = () =>
-              resolve({
-                id: `${file.name}-${file.lastModified}-${Math.random()}`,
-                file,
-                url,
-                width: image.naturalWidth,
-                height: image.naturalHeight,
-                selected: true,
-              });
-            image.onerror = () => {
-              URL.revokeObjectURL(url);
-              reject(new Error("image-load-failed"));
-            };
-            image.src = url;
-          }),
-      ),
+    const results = await Promise.allSettled(
+      imageFiles.map(async (file) => ({
+        ...(await loadImageAsset(file)),
+        id: `${file.name}-${file.lastModified}-${Math.random()}`,
+        file,
+        selected: true,
+      })),
     );
+    const loaded = results.flatMap((result) =>
+      result.status === "fulfilled" ? [result.value] : [],
+    );
+
+    if (!loaded.length) {
+      showNotice("图片读取失败，请重试或更换图片");
+      return;
+    }
 
     setItems((current) => [...current, ...loaded]);
     setActiveId((current) => current ?? loaded[0]?.id ?? null);
-    showNotice(`${loaded.length} 张图片已加入编辑队列`);
+    const failedCount = results.length - loaded.length;
+    showNotice(
+      failedCount
+        ? `${loaded.length} 张图片已加入，${failedCount} 张读取失败`
+        : `${loaded.length} 张图片已加入编辑队列`,
+    );
+  };
+
+  const addWatermark = async (fileList: FileList | File[]) => {
+    const file = Array.from(fileList).find((candidate) => candidate.type.startsWith("image/"));
+    if (!file) {
+      showNotice("请选择 PNG、JPG 或 WebP 水印图片");
+      return;
+    }
+
+    try {
+      const loaded = await loadImageAsset(file);
+      setWatermark((current) => {
+        if (current) URL.revokeObjectURL(current.url);
+        return { ...loaded, file };
+      });
+      showNotice(`水印图片已上传：${file.name}`);
+    } catch {
+      showNotice("水印图片读取失败，请重试");
+    }
   };
 
   const onFileChange = (event: ChangeEvent<HTMLInputElement>) => {
@@ -144,6 +184,25 @@ export default function Home() {
     event.preventDefault();
     setIsDragging(false);
     void addFiles(event.dataTransfer.files);
+  };
+
+  const onWatermarkChange = (event: ChangeEvent<HTMLInputElement>) => {
+    if (event.target.files) void addWatermark(event.target.files);
+    event.target.value = "";
+  };
+
+  const onWatermarkDrop = (event: DragEvent<HTMLDivElement>) => {
+    event.preventDefault();
+    setIsWatermarkDragging(false);
+    void addWatermark(event.dataTransfer.files);
+  };
+
+  const clearWatermark = () => {
+    setWatermark((current) => {
+      if (current) URL.revokeObjectURL(current.url);
+      return null;
+    });
+    showNotice("水印图片已移除");
   };
 
   const updateSettings = <K extends keyof Settings>(key: K, value: Settings[K]) => {
@@ -175,6 +234,8 @@ export default function Home() {
   };
 
   const getExportBlob = async (item: ImageItem) => {
+    if (!watermark) throw new Error("watermark-unavailable");
+
     const image = new Image();
     image.src = item.url;
     await new Promise<void>((resolve, reject) => {
@@ -189,24 +250,49 @@ export default function Home() {
     if (!context) throw new Error("canvas-unavailable");
 
     context.drawImage(image, 0, 0, item.width, item.height);
-    const margin = Math.max(24, Math.round(Math.min(item.width, item.height) * 0.05));
-    const fontSize = Math.max(16, Math.round(settings.size * Math.max(item.width, item.height) / 820));
-    context.font = `600 ${fontSize}px Arial, sans-serif`;
-    context.fillStyle = settings.color === "light" ? "#ffffff" : "#121518";
+    const watermarkImage = new Image();
+    watermarkImage.src = watermark.url;
+    await new Promise<void>((resolve, reject) => {
+      watermarkImage.onload = () => resolve();
+      watermarkImage.onerror = () => reject(new Error("watermark-load-failed"));
+    });
+
+    const margin = Math.max(24, Math.round(Math.min(item.width, item.height) * 0.07));
+    const maxWidth = Math.max(1, item.width - margin * 2);
+    const watermarkWidth = Math.min(
+      maxWidth,
+      Math.max(1, Math.round(item.width * (settings.size / 100))),
+    );
+    const watermarkHeight = Math.max(
+      1,
+      Math.round(watermarkWidth * (watermark.height / watermark.width)),
+    );
     context.globalAlpha = settings.opacity / 100;
-    context.textBaseline = "middle";
 
     const [vertical, horizontal] = settings.position.split("-") as [
       "top" | "middle" | "bottom",
       "left" | "center" | "right",
     ];
-    const x = horizontal === "left" ? margin : horizontal === "right" ? item.width - margin : item.width / 2;
-    const y = vertical === "top" ? margin + fontSize / 2 : vertical === "bottom" ? item.height - margin - fontSize / 2 : item.height / 2;
-    context.textAlign = horizontal;
+    const x = horizontal === "left"
+      ? margin
+      : horizontal === "right"
+        ? item.width - margin - watermarkWidth
+        : (item.width - watermarkWidth) / 2;
+    const y = vertical === "top"
+      ? margin
+      : vertical === "bottom"
+        ? item.height - margin - watermarkHeight
+        : (item.height - watermarkHeight) / 2;
     context.save();
-    context.translate(x, y);
+    context.translate(x + watermarkWidth / 2, y + watermarkHeight / 2);
     context.rotate((settings.angle * Math.PI) / 180);
-    context.fillText(settings.text || "水印", 0, 0);
+    context.drawImage(
+      watermarkImage,
+      -watermarkWidth / 2,
+      -watermarkHeight / 2,
+      watermarkWidth,
+      watermarkHeight,
+    );
     context.restore();
 
     const mime = ["image/jpeg", "image/png", "image/webp"].includes(item.file.type)
@@ -231,7 +317,10 @@ export default function Home() {
   };
 
   const downloadSelected = async () => {
-    if (!selectedItems.length || isDownloading) return;
+    if (!selectedItems.length || !watermark || isDownloading) {
+      if (!watermark && selectedItems.length) showNotice("请先上传水印图片");
+      return;
+    }
     setIsDownloading(true);
     showNotice("正在按原尺寸导出，请稍候…");
     try {
@@ -281,15 +370,67 @@ export default function Home() {
             <span className="live-pill"><span />实时</span>
           </div>
 
-          <label className="field-label" htmlFor="watermark-text">水印文字</label>
-          <div className="text-input-wrap">
-            <input id="watermark-text" value={settings.text} onChange={(event) => updateSettings("text", event.target.value)} maxLength={40} />
-            <span>{settings.text.length}/40</span>
+          <label className="field-label" htmlFor="watermark-image">水印图片</label>
+          <div
+            className={`watermark-upload${isWatermarkDragging ? " is-dragging" : ""}${watermark ? " has-image" : ""}`}
+            role="button"
+            tabIndex={0}
+            onClick={() => watermarkInputRef.current?.click()}
+            onKeyDown={(event) => {
+              if (event.key === "Enter" || event.key === " ") {
+                event.preventDefault();
+                watermarkInputRef.current?.click();
+              }
+            }}
+            onDragEnter={(event) => {
+              event.preventDefault();
+              setIsWatermarkDragging(true);
+            }}
+            onDragOver={(event) => event.preventDefault()}
+            onDragLeave={() => setIsWatermarkDragging(false)}
+            onDrop={onWatermarkDrop}
+          >
+            <input
+              ref={watermarkInputRef}
+              id="watermark-image"
+              className="visually-hidden"
+              type="file"
+              accept="image/png,image/jpeg,image/webp"
+              onClick={(event) => event.stopPropagation()}
+              onChange={onWatermarkChange}
+            />
+            {watermark ? (
+              <>
+                <img className="watermark-thumb" src={watermark.url} alt="" />
+                <div className="watermark-file-info">
+                  <strong>{watermark.file.name}</strong>
+                  <span>{watermark.width} × {watermark.height} · {formatBytes(watermark.file.size)}</span>
+                </div>
+                <button
+                  type="button"
+                  className="watermark-remove"
+                  onClick={(event) => {
+                    event.stopPropagation();
+                    clearWatermark();
+                  }}
+                >
+                  移除
+                </button>
+              </>
+            ) : (
+              <>
+                <span className="watermark-upload-icon">＋</span>
+                <div>
+                  <strong>上传水印图片</strong>
+                  <p>拖入透明 PNG，或点击选择</p>
+                </div>
+              </>
+            )}
           </div>
 
           <div className="control-block">
-            <div className="control-row"><label htmlFor="size">大小</label><output>{settings.size}px</output></div>
-            <input id="size" className="range-input" type="range" min="14" max="64" value={settings.size} onChange={(event) => updateSettings("size", Number(event.target.value))} />
+            <div className="control-row"><label htmlFor="size">大小</label><output>{settings.size}%</output></div>
+            <input id="size" className="range-input" type="range" min="8" max="64" value={settings.size} onChange={(event) => updateSettings("size", Number(event.target.value))} />
             <div className="range-hints"><span>小</span><span>大</span></div>
           </div>
 
@@ -316,14 +457,6 @@ export default function Home() {
             </div>
           </div>
 
-          <div className="control-block color-block">
-            <div className="control-row"><span>颜色</span><output>{settings.color === "light" ? "浅色" : "深色"}</output></div>
-            <div className="color-options">
-              <button type="button" className={settings.color === "light" ? "color-choice is-active" : "color-choice"} onClick={() => updateSettings("color", "light")}><span className="swatch swatch-light" />浅色</button>
-              <button type="button" className={settings.color === "dark" ? "color-choice is-active" : "color-choice"} onClick={() => updateSettings("color", "dark")}><span className="swatch swatch-dark" />深色</button>
-            </div>
-          </div>
-
           <div className="privacy-card"><span className="privacy-icon">✦</span><div><strong>你的文件不会被上传</strong><p>所有图片处理都在当前设备完成。</p></div></div>
         </aside>
 
@@ -335,17 +468,17 @@ export default function Home() {
 
           {items.length === 0 ? (
             <div className={isDragging ? "upload-zone is-dragging" : "upload-zone"} onDragEnter={(event) => { event.preventDefault(); setIsDragging(true); }} onDragOver={(event) => event.preventDefault()} onDragLeave={() => setIsDragging(false)} onDrop={onDrop}>
-              <input ref={fileInputRef} type="file" accept="image/jpeg,image/png,image/webp" multiple onChange={onFileChange} />
+              <input ref={fileInputRef} name="images" type="file" accept="image/jpeg,image/png,image/webp" multiple aria-label="选择需要加水印的图片，可多选" onChange={onFileChange} />
               <div className="upload-icon"><span>＋</span></div>
               <h3>把图片拖到这里</h3>
-              <p>一次选择多张图片，或</p>
+              <p>可一次选择多张图片，或</p>
               <button type="button" className="browse-button" onClick={() => fileInputRef.current?.click()}>从设备选择图片 <span>↗</span></button>
-              <div className="upload-meta"><span>JPG</span><span>PNG</span><span>WEBP</span><i />单张最大 25 MB</div>
+              <div className="upload-meta"><span>JPG</span><span>PNG</span><span>WEBP</span><i />支持多选 · 单张最大 25 MB</div>
             </div>
           ) : (
             <div className="preview-layout">
               <div className="preview-stage">
-                {activeItem && <div className="canvas-frame" style={{ aspectRatio: `${activeItem.width} / ${activeItem.height}` }}><img src={activeItem.url} alt={activeItem.file.name} /><span className="preview-watermark" style={watermarkStyle(settings)}>{settings.text || "水印"}</span><div className="frame-badge">预览</div></div>}
+                {activeItem && <div className="canvas-frame" style={{ aspectRatio: `${activeItem.width} / ${activeItem.height}` }}><img className="source-image" src={activeItem.url} alt={activeItem.file.name} />{watermark && <img className="preview-watermark" src={watermark.url} alt="" style={watermarkStyle(settings)} />}<div className="frame-badge">预览</div></div>}
                 <div className="stage-footer"><span>{activeItem?.file.name}</span><span>{activeItem ? `${activeItem.width} × ${activeItem.height} · ${formatBytes(activeItem.file.size)}` : ""}</span></div>
               </div>
               <div className="thumb-strip">
@@ -354,15 +487,15 @@ export default function Home() {
                   <button type="button" className="thumb-image-button" onClick={() => setActiveId(item.id)}><img src={item.url} alt={`第 ${index + 1} 张：${item.file.name}`} /></button>
                   <div className="thumb-meta"><span>{String(index + 1).padStart(2, "0")}</span><button type="button" onClick={() => removeItem(item.id)} aria-label={`移除 ${item.file.name}`}>×</button></div>
                 </div>)}
-                <button type="button" className="add-more-card" onClick={() => fileInputRef.current?.click()}><span>＋</span><small>继续添加</small></button>
-                <input ref={fileInputRef} className="visually-hidden" type="file" accept="image/jpeg,image/png,image/webp" multiple onChange={onFileChange} />
+                <button type="button" className="add-more-card" onClick={() => fileInputRef.current?.click()}><span>＋</span><small>继续添加 · 可多选</small></button>
+                <input ref={fileInputRef} name="images" className="visually-hidden" type="file" accept="image/jpeg,image/png,image/webp" multiple aria-label="继续添加需要加水印的图片，可多选" onChange={onFileChange} />
               </div>
             </div>
           )}
 
           <div className="editor-footer">
-            <div className="footer-status"><span className="status-icon">↗</span><div><strong>{notice}</strong><small>{items.length ? "调整设置会同步应用到选中的图片" : "支持批量上传 · 处理过程无需联网"}</small></div></div>
-            <div className="footer-actions"><button type="button" className="secondary-button" onClick={() => { setItems((current) => current.map((item) => ({ ...item, selected: true }))); showNotice("已选中全部图片"); }} disabled={!items.length}>应用到全部</button><button type="button" className="download-button" onClick={() => void downloadSelected()} disabled={!selectedItems.length || isDownloading}><span>{isDownloading ? "导出中…" : "下载全部"}</span><b>↓</b></button></div>
+            <div className="footer-status"><span className="status-icon">↗</span><div><strong>{notice}</strong><small>{items.length ? watermark ? "调整设置会同步应用到选中的图片" : "请先在左侧上传水印图片" : "支持批量上传 · 处理过程无需联网"}</small></div></div>
+            <div className="footer-actions"><button type="button" className="secondary-button" onClick={() => { setItems((current) => current.map((item) => ({ ...item, selected: true }))); showNotice("已选中全部图片"); }} disabled={!items.length}>应用到全部</button><button type="button" className="download-button" onClick={() => void downloadSelected()} disabled={!selectedItems.length || !watermark || isDownloading}><span>{isDownloading ? "导出中…" : "下载全部"}</span><b>↓</b></button></div>
           </div>
         </div>
       </section>

@@ -13,6 +13,12 @@ test("creates a production build for Picmark Studio", async () => {
 
   assert.match(page, /批量给图片/);
   assert.match(page, /canvas/i);
+  assert.match(page, /id="watermark-image"/);
+  assert.match(page, /上传水印图片/);
+  assert.match(page, /name="images"/);
+  assert.match(page, /multiple/);
+  assert.match(page, /可多选/);
+  assert.doesNotMatch(page, /水印文字/);
   assert.match(layout, /Picmark Studio/);
   assert.match(packageJson, /"next": "16\.3\.0"/);
   assert.doesNotMatch(packageJson, /vinext|wrangler|drizzle|cloudflare/);
