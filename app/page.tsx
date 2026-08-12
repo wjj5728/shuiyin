@@ -2,7 +2,7 @@
 
 import { Rnd } from "react-rnd";
 import type { ChangeEvent, DragEvent, PointerEvent as ReactPointerEvent } from "react";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 type ImageItem = {
   id: string;
@@ -11,6 +11,7 @@ type ImageItem = {
   width: number;
   height: number;
   selected: boolean;
+  settings: Settings;
 };
 
 type WatermarkImage = {
@@ -139,7 +140,6 @@ export default function Home() {
   const [items, setItems] = useState<ImageItem[]>([]);
   const [watermark, setWatermark] = useState<WatermarkImage | null>(null);
   const [activeId, setActiveId] = useState<string | null>(null);
-  const [settings, setSettings] = useState<Settings>(initialSettings);
   const [isDragging, setIsDragging] = useState(false);
   const [isWatermarkDragging, setIsWatermarkDragging] = useState(false);
   const [showWatermarkPresets, setShowWatermarkPresets] = useState(false);
@@ -150,6 +150,7 @@ export default function Home() {
   const canvasFrameRef = useRef<HTMLDivElement>(null);
   const rotationInteractionRef = useRef<RotationInteraction | null>(null);
   const watermarkLoadIdRef = useRef(0);
+  const activeIdRef = useRef<string | null>(null);
   const [frameSize, setFrameSize] = useState({ width: 0, height: 0 });
 
   const activeItem = useMemo(
@@ -157,6 +158,11 @@ export default function Home() {
     [activeId, items],
   );
   const selectedItems = useMemo(() => items.filter((item) => item.selected), [items]);
+  const settings = activeItem?.settings ?? initialSettings;
+
+  useEffect(() => {
+    activeIdRef.current = activeItem?.id ?? null;
+  }, [activeItem?.id]);
 
   useEffect(() => {
     const element = canvasFrameRef.current;
@@ -189,6 +195,7 @@ export default function Home() {
         id: `${file.name}-${file.lastModified}-${Math.random()}`,
         file,
         selected: true,
+        settings: { ...initialSettings },
       })),
     );
     const loaded = results.flatMap((result) =>
@@ -286,7 +293,15 @@ export default function Home() {
   };
 
   const updateSettings = <K extends keyof Settings>(key: K, value: Settings[K]) => {
-    setSettings((current) => ({ ...current, [key]: value }));
+    const itemId = activeIdRef.current;
+    if (!itemId) return;
+    setItems((current) =>
+      current.map((item) =>
+        item.id === itemId
+          ? { ...item, settings: { ...item.settings, [key]: value } }
+          : item,
+      ),
+    );
   };
 
   const renderedWatermarkSize = useMemo(() => {
@@ -302,11 +317,22 @@ export default function Home() {
     if (!frameSize.width || !frameSize.height || !width || !height) return;
     const halfWidth = (width / frameSize.width) * 50;
     const halfHeight = (height / frameSize.height) * 50;
-    setSettings((current) => ({
-      ...current,
-      x: clamp((x + width / 2) / frameSize.width * 100, halfWidth, 100 - halfWidth),
-      y: clamp((y + height / 2) / frameSize.height * 100, halfHeight, 100 - halfHeight),
-    }));
+    const itemId = activeIdRef.current;
+    if (!itemId) return;
+    setItems((current) =>
+      current.map((item) =>
+        item.id === itemId
+          ? {
+              ...item,
+              settings: {
+                ...item.settings,
+                x: clamp((x + width / 2) / frameSize.width * 100, halfWidth, 100 - halfWidth),
+                y: clamp((y + height / 2) / frameSize.height * 100, halfHeight, 100 - halfHeight),
+              },
+            }
+          : item,
+      ),
+    );
   };
 
   const handleWatermarkDrag = (_event: unknown, data: { x: number; y: number }) => {
@@ -322,8 +348,8 @@ export default function Home() {
   ) => {
     if (!frameSize.width) return;
     const nextSize = (elementRef.offsetWidth / frameSize.width) * 100;
-    setSettings((current) => ({ ...current, size: nextSize }));
     updateWatermarkPosition(position.x, position.y, elementRef.offsetWidth, elementRef.offsetHeight);
+    updateSettings("size", nextSize);
   };
 
   const beginWatermarkRotation = (event: ReactPointerEvent<HTMLButtonElement>) => {
@@ -344,7 +370,7 @@ export default function Home() {
     };
   };
 
-  const updateWatermarkRotation = (event: ReactPointerEvent<HTMLButtonElement> | PointerEvent) => {
+  const updateWatermarkRotation = useCallback((event: ReactPointerEvent<HTMLButtonElement> | PointerEvent) => {
     const interaction = rotationInteractionRef.current;
     if (!interaction || interaction.pointerId !== event.pointerId) return;
 
@@ -359,13 +385,13 @@ export default function Home() {
       currentPointerAngle,
       interaction.startPointerAngle,
     );
-    setSettings((current) => ({ ...current, angle: Math.round(nextRotation) }));
-  };
+    updateSettings("angle", Math.round(nextRotation));
+  }, []);
 
-  const endWatermarkRotation = (event: ReactPointerEvent<HTMLButtonElement> | PointerEvent) => {
+  const endWatermarkRotation = useCallback((event: ReactPointerEvent<HTMLButtonElement> | PointerEvent) => {
     if (rotationInteractionRef.current?.pointerId !== event.pointerId) return;
     rotationInteractionRef.current = null;
-  };
+  }, []);
 
   useEffect(() => {
     const handleWindowPointerMove = (event: PointerEvent) => {
@@ -384,7 +410,7 @@ export default function Home() {
       window.removeEventListener("pointerup", handleWindowPointerEnd);
       window.removeEventListener("pointercancel", handleWindowPointerEnd);
     };
-  }, []);
+  }, [endWatermarkRotation, updateWatermarkRotation]);
 
   const toggleItem = (id: string) => {
     setItems((current) =>
@@ -434,18 +460,18 @@ export default function Home() {
       watermarkImage.onerror = () => reject(new Error("watermark-load-failed"));
     });
 
-    const watermarkWidth = Math.max(1, Math.round(item.width * (settings.size / 100)));
+    const watermarkWidth = Math.max(1, Math.round(item.width * (item.settings.size / 100)));
     const watermarkHeight = Math.max(
       1,
       Math.round(watermarkWidth * (watermark.height / watermark.width)),
     );
-    context.globalAlpha = settings.opacity / 100;
+    context.globalAlpha = item.settings.opacity / 100;
 
-    const x = (item.width * settings.x) / 100;
-    const y = (item.height * settings.y) / 100;
+    const x = (item.width * item.settings.x) / 100;
+    const y = (item.height * item.settings.y) / 100;
     context.save();
     context.translate(x, y);
-    context.rotate((settings.angle * Math.PI) / 180);
+    context.rotate((item.settings.angle * Math.PI) / 180);
     context.drawImage(
       watermarkImage,
       -watermarkWidth / 2,
@@ -707,7 +733,7 @@ export default function Home() {
           )}
 
           <div className="editor-footer">
-            <div className="footer-status"><span className="status-icon">↗</span><div><strong>{notice}</strong><small>{items.length ? watermark ? "调整设置会同步应用到选中的图片" : "请先在左侧上传水印图片" : "支持批量上传 · 处理过程无需联网"}</small></div></div>
+            <div className="footer-status"><span className="status-icon">↗</span><div><strong>{notice}</strong><small>{items.length ? watermark ? "每张图片独立保存大小、位置和旋转；切换水印会应用到全部图片" : "请先在左侧上传水印图片" : "支持批量上传 · 处理过程无需联网"}</small></div></div>
             <div className="footer-actions"><button type="button" className="secondary-button" onClick={() => { setItems((current) => current.map((item) => ({ ...item, selected: true }))); showNotice("已选中全部图片"); }} disabled={!items.length}>应用到全部</button><button type="button" className="download-button" onClick={() => void downloadSelected()} disabled={!selectedItems.length || !watermark || isDownloading}><span>{isDownloading ? "导出中…" : "下载全部"}</span><b>↓</b></button></div>
           </div>
         </div>

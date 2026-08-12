@@ -42,6 +42,14 @@ test("creates a production build for Picmark Studio", async () => {
   assert.match(page, /可多选/);
   assert.match(page, /onDragStop/);
   assert.match(page, /onResizeStop/);
+  assert.match(page, /settings: \{ \.\.\.initialSettings \}/);
+  assert.match(page, /activeIdRef/);
+  assert.match(page, /item\.settings\.size/);
+  assert.match(page, /item\.settings\.opacity/);
+  assert.match(page, /item\.settings\.x/);
+  assert.match(page, /item\.settings\.y/);
+  assert.match(page, /item\.settings\.angle/);
+  assert.match(page, /每张图片独立保存大小、位置和旋转/);
   assert.match(page, /watermark-rotate-handle/);
   assert.match(page, /preview-watermark-content/);
   assert.match(page, /transform: `rotate\(\$\{settings\.angle\}deg\)`/);
