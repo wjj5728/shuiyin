@@ -20,7 +20,8 @@ test("creates a production build for Picmark Studio", async () => {
   assert.match(page, /可多选/);
   assert.match(page, /onDragStop/);
   assert.match(page, /onResizeStop/);
-  assert.match(page, /拖拽右下角手柄缩放/);
+  assert.match(page, /watermark-rotate-handle/);
+  assert.match(page, /拖上方手柄旋转/);
   assert.doesNotMatch(page, /水印文字/);
   assert.match(layout, /Picmark Studio/);
   assert.match(packageJson, /"react-rnd":/);

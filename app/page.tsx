@@ -1,7 +1,7 @@
 "use client";
 
 import { Rnd } from "react-rnd";
-import type { ChangeEvent, DragEvent } from "react";
+import type { ChangeEvent, DragEvent, PointerEvent as ReactPointerEvent } from "react";
 import { useEffect, useMemo, useRef, useState } from "react";
 
 type ImageItem = {
@@ -28,6 +28,14 @@ type Settings = {
   y: number;
 };
 
+type RotationInteraction = {
+  pointerId: number;
+  centerX: number;
+  centerY: number;
+  startPointerAngle: number;
+  startRotation: number;
+};
+
 const initialSettings: Settings = {
   size: 28,
   opacity: 62,
@@ -47,6 +55,17 @@ function formatAngle(angle: number) {
 
 function clamp(value: number, min: number, max: number) {
   return Math.min(Math.max(value, min), max);
+}
+
+function pointerAngle(clientX: number, clientY: number, centerX: number, centerY: number) {
+  return (Math.atan2(clientY - centerY, clientX - centerX) * 180) / Math.PI;
+}
+
+function shortestAngleDelta(current: number, start: number) {
+  let delta = current - start;
+  if (delta > 180) delta -= 360;
+  if (delta < -180) delta += 360;
+  return delta;
 }
 
 function loadImageAsset(file: File): Promise<Omit<WatermarkImage, "file">> {
@@ -79,6 +98,7 @@ export default function Home() {
   const fileInputRef = useRef<HTMLInputElement>(null);
   const watermarkInputRef = useRef<HTMLInputElement>(null);
   const canvasFrameRef = useRef<HTMLDivElement>(null);
+  const rotationInteractionRef = useRef<RotationInteraction | null>(null);
   const [frameSize, setFrameSize] = useState({ width: 0, height: 0 });
 
   const activeItem = useMemo(
@@ -227,6 +247,51 @@ export default function Home() {
     const nextSize = (elementRef.offsetWidth / frameSize.width) * 100;
     setSettings((current) => ({ ...current, size: nextSize }));
     updateWatermarkPosition(position.x, position.y, elementRef.offsetWidth, elementRef.offsetHeight);
+  };
+
+  const beginWatermarkRotation = (event: ReactPointerEvent<HTMLButtonElement>) => {
+    const shell = event.currentTarget.closest(".preview-watermark-shell");
+    if (!shell) return;
+
+    event.preventDefault();
+    event.stopPropagation();
+    const rect = shell.getBoundingClientRect();
+    const centerX = rect.left + rect.width / 2;
+    const centerY = rect.top + rect.height / 2;
+    rotationInteractionRef.current = {
+      pointerId: event.pointerId,
+      centerX,
+      centerY,
+      startPointerAngle: pointerAngle(event.clientX, event.clientY, centerX, centerY),
+      startRotation: settings.angle,
+    };
+    event.currentTarget.setPointerCapture(event.pointerId);
+  };
+
+  const moveWatermarkRotation = (event: ReactPointerEvent<HTMLButtonElement>) => {
+    const interaction = rotationInteractionRef.current;
+    if (!interaction || interaction.pointerId !== event.pointerId) return;
+
+    event.preventDefault();
+    const currentPointerAngle = pointerAngle(
+      event.clientX,
+      event.clientY,
+      interaction.centerX,
+      interaction.centerY,
+    );
+    const nextRotation = interaction.startRotation + shortestAngleDelta(
+      currentPointerAngle,
+      interaction.startPointerAngle,
+    );
+    setSettings((current) => ({ ...current, angle: Math.round(nextRotation) }));
+  };
+
+  const endWatermarkRotation = (event: ReactPointerEvent<HTMLButtonElement>) => {
+    if (rotationInteractionRef.current?.pointerId !== event.pointerId) return;
+    rotationInteractionRef.current = null;
+    if (event.currentTarget.hasPointerCapture(event.pointerId)) {
+      event.currentTarget.releasePointerCapture(event.pointerId);
+    }
   };
 
   const toggleItem = (id: string) => {
@@ -444,14 +509,14 @@ export default function Home() {
           </div>
 
           <div className="control-block">
-            <div className="control-row"><label htmlFor="angle">方向</label><output>{formatAngle(settings.angle)}</output></div>
-            <input id="angle" className="range-input" type="range" min="-45" max="45" value={settings.angle} onChange={(event) => updateSettings("angle", Number(event.target.value))} />
-            <div className="range-hints"><span>−45°</span><span>0°</span><span>+45°</span></div>
+            <div className="control-row"><label htmlFor="angle">旋转</label><output>{formatAngle(settings.angle)}</output></div>
+            <input id="angle" className="range-input" type="range" min="-180" max="180" value={settings.angle} onChange={(event) => updateSettings("angle", Number(event.target.value))} />
+            <div className="range-hints"><span>−180°</span><span>0°</span><span>+180°</span></div>
           </div>
 
           <div className="control-block position-block">
             <div className="control-row"><span>位置</span><output>{Math.round(settings.x)}% · {Math.round(settings.y)}%</output></div>
-            <p className="position-hint">直接拖动预览中的水印移动位置，拖拽右下角手柄缩放。</p>
+            <p className="position-hint">拖动水印移动位置，拖右下角缩放，拖上方手柄旋转。</p>
           </div>
 
           <div className="privacy-card"><span className="privacy-icon">✦</span><div><strong>你的文件不会被上传</strong><p>所有图片处理都在当前设备完成。</p></div></div>
@@ -488,12 +553,13 @@ export default function Home() {
                   lockAspectRatio={watermark.width / watermark.height}
                   enableResizing={{ bottomRight: true }}
                   resizeHandleClasses={{ bottomRight: "watermark-resize-handle" }}
-                  cancel=".watermark-resize-handle"
+                  cancel=".watermark-resize-handle, .watermark-rotate-handle"
                   style={{ opacity: settings.opacity / 100, transform: `rotate(${settings.angle}deg)`, transformOrigin: "center", touchAction: "none" }}
                   onDragStop={handleWatermarkDrag}
                   onResizeStop={handleWatermarkResize}
                 >
                   <img className="preview-watermark" src={watermark.url} alt="当前水印" draggable={false} />
+                  <button type="button" className="watermark-rotate-handle" aria-label="拖动旋转水印" onPointerDown={beginWatermarkRotation} onPointerMove={moveWatermarkRotation} onPointerUp={endWatermarkRotation} onPointerCancel={endWatermarkRotation}>↻</button>
                 </Rnd>}<div className="frame-badge">预览</div></div>}
                 <div className="stage-footer"><span>{activeItem?.file.name}</span><span>{activeItem ? `${activeItem.width} × ${activeItem.height} · ${formatBytes(activeItem.file.size)}` : ""}</span></div>
               </div>
