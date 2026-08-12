@@ -44,6 +44,20 @@ const initialSettings: Settings = {
   y: 80,
 };
 
+type WatermarkPreset = {
+  name: string;
+  src: string;
+  fileName: string;
+};
+
+const watermarkPresets: WatermarkPreset[] = [
+  {
+    name: "红色印章",
+    src: "/watermarks/stamp-red.png",
+    fileName: "红色印章.png",
+  },
+];
+
 function formatBytes(bytes: number) {
   if (bytes < 1024 * 1024) return `${Math.max(1, Math.round(bytes / 1024))} KB`;
   return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
@@ -93,6 +107,7 @@ export default function Home() {
   const [settings, setSettings] = useState<Settings>(initialSettings);
   const [isDragging, setIsDragging] = useState(false);
   const [isWatermarkDragging, setIsWatermarkDragging] = useState(false);
+  const [showWatermarkPresets, setShowWatermarkPresets] = useState(false);
   const [isDownloading, setIsDownloading] = useState(false);
   const [notice, setNotice] = useState("准备好了，拖入图片开始编辑");
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -159,6 +174,19 @@ export default function Home() {
     );
   };
 
+  const applyWatermarkFile = async (file: File, message: string) => {
+    try {
+      const loaded = await loadImageAsset(file);
+      setWatermark((current) => {
+        if (current) URL.revokeObjectURL(current.url);
+        return { ...loaded, file };
+      });
+      showNotice(message);
+    } catch {
+      showNotice("水印图片读取失败，请重试");
+    }
+  };
+
   const addWatermark = async (fileList: FileList | File[]) => {
     const file = Array.from(fileList).find((candidate) => candidate.type.startsWith("image/"));
     if (!file) {
@@ -166,15 +194,21 @@ export default function Home() {
       return;
     }
 
+    await applyWatermarkFile(file, `水印图片已上传：${file.name}`);
+  };
+
+  const selectWatermarkPreset = async (preset: WatermarkPreset) => {
     try {
-      const loaded = await loadImageAsset(file);
-      setWatermark((current) => {
-        if (current) URL.revokeObjectURL(current.url);
-        return { ...loaded, file };
+      const response = await fetch(preset.src);
+      if (!response.ok) throw new Error("preset-fetch-failed");
+      const blob = await response.blob();
+      const file = new File([blob], preset.fileName, {
+        type: blob.type || "image/png",
       });
-      showNotice(`水印图片已上传：${file.name}`);
+      await applyWatermarkFile(file, `已应用本地水印：${preset.name}`);
+      setShowWatermarkPresets(false);
     } catch {
-      showNotice("水印图片读取失败，请重试");
+      showNotice("本地水印加载失败，请稍后重试");
     }
   };
 
@@ -495,6 +529,38 @@ export default function Home() {
               </>
             )}
           </div>
+
+          <div className="watermark-actions">
+            <button
+              type="button"
+              className="preset-toggle"
+              aria-expanded={showWatermarkPresets}
+              onClick={() => setShowWatermarkPresets((current) => !current)}
+            >
+              <span>✦</span>
+              {showWatermarkPresets ? "收起本地水印" : "选择本地水印"}
+              <b>{watermarkPresets.length}</b>
+            </button>
+            <small>也可以上传自己的图片</small>
+          </div>
+
+          {showWatermarkPresets && (
+            <div className="watermark-presets" aria-label="本地水印素材">
+              {watermarkPresets.map((preset) => (
+                <button
+                  key={preset.src}
+                  type="button"
+                  className="watermark-preset-card"
+                  onClick={() => void selectWatermarkPreset(preset)}
+                >
+                  <span className="watermark-preset-thumb">
+                    <img src={preset.src} alt="" />
+                  </span>
+                  <span>{preset.name}</span>
+                </button>
+              ))}
+            </div>
+          )}
 
           <div className="control-block">
             <div className="control-row"><label htmlFor="size">大小</label><output>{settings.size}%</output></div>

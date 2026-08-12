@@ -3,7 +3,10 @@ import { access, readFile } from "node:fs/promises";
 import test from "node:test";
 
 test("creates a production build for Picmark Studio", async () => {
-  await access(new URL("../.next/BUILD_ID", import.meta.url));
+  await Promise.all([
+    access(new URL("../.next/BUILD_ID", import.meta.url)),
+    access(new URL("../public/watermarks/stamp-red.png", import.meta.url)),
+  ]);
 
   const [page, layout, packageJson] = await Promise.all([
     readFile(new URL("../app/page.tsx", import.meta.url), "utf8"),
@@ -15,6 +18,8 @@ test("creates a production build for Picmark Studio", async () => {
   assert.match(page, /canvas/i);
   assert.match(page, /id="watermark-image"/);
   assert.match(page, /上传水印图片/);
+  assert.match(page, /选择本地水印/);
+  assert.match(page, /watermarks\/stamp-red\.png/);
   assert.match(page, /name="images"/);
   assert.match(page, /multiple/);
   assert.match(page, /可多选/);
