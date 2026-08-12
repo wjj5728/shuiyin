@@ -71,6 +71,26 @@ const watermarkPresets: WatermarkPreset[] = [
     src: "/watermarks/sold-gold.png",
     fileName: "金色手绘-已售.png",
   },
+  {
+    name: "黑色撕纸｜已售",
+    src: "/watermarks/sold-black-sticker.png",
+    fileName: "黑色撕纸-已售.png",
+  },
+  {
+    name: "蓝色气泡｜已售",
+    src: "/watermarks/sold-blue-bubble.png",
+    fileName: "蓝色气泡-已售.png",
+  },
+  {
+    name: "紫金菱形｜已售",
+    src: "/watermarks/sold-purple-diamond.png",
+    fileName: "紫金菱形-已售.png",
+  },
+  {
+    name: "橙色票券｜已售",
+    src: "/watermarks/sold-orange-banner.png",
+    fileName: "橙色票券-已售.png",
+  },
 ];
 
 function formatBytes(bytes: number) {

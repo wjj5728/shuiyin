@@ -9,6 +9,10 @@ test("creates a production build for Picmark Studio", async () => {
     access(new URL("../public/watermarks/sold-red.png", import.meta.url)),
     access(new URL("../public/watermarks/sold-blue.png", import.meta.url)),
     access(new URL("../public/watermarks/sold-gold.png", import.meta.url)),
+    access(new URL("../public/watermarks/sold-black-sticker.png", import.meta.url)),
+    access(new URL("../public/watermarks/sold-blue-bubble.png", import.meta.url)),
+    access(new URL("../public/watermarks/sold-purple-diamond.png", import.meta.url)),
+    access(new URL("../public/watermarks/sold-orange-banner.png", import.meta.url)),
   ]);
 
   const [page, layout, packageJson] = await Promise.all([
@@ -26,6 +30,10 @@ test("creates a production build for Picmark Studio", async () => {
   assert.match(page, /watermarks\/sold-red\.png/);
   assert.match(page, /watermarks\/sold-blue\.png/);
   assert.match(page, /watermarks\/sold-gold\.png/);
+  assert.match(page, /watermarks\/sold-black-sticker\.png/);
+  assert.match(page, /watermarks\/sold-blue-bubble\.png/);
+  assert.match(page, /watermarks\/sold-purple-diamond\.png/);
+  assert.match(page, /watermarks\/sold-orange-banner\.png/);
   assert.match(page, /name="images"/);
   assert.match(page, /multiple/);
   assert.match(page, /可多选/);
