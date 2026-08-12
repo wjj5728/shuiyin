@@ -1,0 +1,373 @@
+"use client";
+
+import type { CSSProperties, ChangeEvent, DragEvent } from "react";
+import { useMemo, useRef, useState } from "react";
+
+type Position =
+  | "top-left"
+  | "top-center"
+  | "top-right"
+  | "middle-left"
+  | "middle-center"
+  | "middle-right"
+  | "bottom-left"
+  | "bottom-center"
+  | "bottom-right";
+
+type ImageItem = {
+  id: string;
+  file: File;
+  url: string;
+  width: number;
+  height: number;
+  selected: boolean;
+};
+
+type Settings = {
+  text: string;
+  size: number;
+  opacity: number;
+  angle: number;
+  position: Position;
+  color: "dark" | "light";
+};
+
+const initialSettings: Settings = {
+  text: "© 你的品牌名",
+  size: 28,
+  opacity: 62,
+  angle: -18,
+  position: "bottom-right",
+  color: "light",
+};
+
+const positionMap: Array<{ key: Position; label: string }> = [
+  { key: "top-left", label: "左上" },
+  { key: "top-center", label: "上中" },
+  { key: "top-right", label: "右上" },
+  { key: "middle-left", label: "左中" },
+  { key: "middle-center", label: "正中" },
+  { key: "middle-right", label: "右中" },
+  { key: "bottom-left", label: "左下" },
+  { key: "bottom-center", label: "下中" },
+  { key: "bottom-right", label: "右下" },
+];
+
+function formatBytes(bytes: number) {
+  if (bytes < 1024 * 1024) return `${Math.max(1, Math.round(bytes / 1024))} KB`;
+  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+}
+
+function formatAngle(angle: number) {
+  return `${angle > 0 ? "+" : ""}${angle}°`;
+}
+
+function watermarkStyle(settings: Settings): CSSProperties {
+  const [vertical, horizontal] = settings.position.split("-") as [
+    "top" | "middle" | "bottom",
+    "left" | "center" | "right",
+  ];
+  const style: CSSProperties = {
+    color: settings.color === "light" ? "#fff" : "#121518",
+    opacity: settings.opacity / 100,
+    fontSize: `clamp(12px, ${settings.size / 4.2}vw, ${settings.size}px)`,
+    transform: `translate(${horizontal === "left" ? "0" : horizontal === "right" ? "-100%" : "-50%"}, ${vertical === "top" ? "0" : vertical === "bottom" ? "-100%" : "-50%"}) rotate(${settings.angle}deg)`,
+  };
+
+  style.left = horizontal === "left" ? "7%" : horizontal === "right" ? "93%" : "50%";
+  style.top = vertical === "top" ? "7%" : vertical === "bottom" ? "93%" : "50%";
+  return style;
+}
+
+export default function Home() {
+  const [items, setItems] = useState<ImageItem[]>([]);
+  const [activeId, setActiveId] = useState<string | null>(null);
+  const [settings, setSettings] = useState<Settings>(initialSettings);
+  const [isDragging, setIsDragging] = useState(false);
+  const [isDownloading, setIsDownloading] = useState(false);
+  const [notice, setNotice] = useState("准备好了，拖入图片开始编辑");
+  const fileInputRef = useRef<HTMLInputElement>(null);
+
+  const activeItem = useMemo(
+    () => items.find((item) => item.id === activeId) ?? items[0] ?? null,
+    [activeId, items],
+  );
+  const selectedItems = useMemo(() => items.filter((item) => item.selected), [items]);
+
+  const showNotice = (message: string) => {
+    setNotice(message);
+    window.setTimeout(() => setNotice("浏览器本地处理 · 不上传服务器"), 3200);
+  };
+
+  const addFiles = async (fileList: FileList | File[]) => {
+    const imageFiles = Array.from(fileList).filter((file) => file.type.startsWith("image/"));
+    if (!imageFiles.length) {
+      showNotice("请选择 JPG、PNG 或 WebP 图片");
+      return;
+    }
+
+    const loaded = await Promise.all(
+      imageFiles.map(
+        (file) =>
+          new Promise<ImageItem>((resolve, reject) => {
+            const url = URL.createObjectURL(file);
+            const image = new Image();
+            image.onload = () =>
+              resolve({
+                id: `${file.name}-${file.lastModified}-${Math.random()}`,
+                file,
+                url,
+                width: image.naturalWidth,
+                height: image.naturalHeight,
+                selected: true,
+              });
+            image.onerror = () => {
+              URL.revokeObjectURL(url);
+              reject(new Error("image-load-failed"));
+            };
+            image.src = url;
+          }),
+      ),
+    );
+
+    setItems((current) => [...current, ...loaded]);
+    setActiveId((current) => current ?? loaded[0]?.id ?? null);
+    showNotice(`${loaded.length} 张图片已加入编辑队列`);
+  };
+
+  const onFileChange = (event: ChangeEvent<HTMLInputElement>) => {
+    if (event.target.files) void addFiles(event.target.files);
+    event.target.value = "";
+  };
+
+  const onDrop = (event: DragEvent<HTMLDivElement>) => {
+    event.preventDefault();
+    setIsDragging(false);
+    void addFiles(event.dataTransfer.files);
+  };
+
+  const updateSettings = <K extends keyof Settings>(key: K, value: Settings[K]) => {
+    setSettings((current) => ({ ...current, [key]: value }));
+  };
+
+  const toggleItem = (id: string) => {
+    setItems((current) =>
+      current.map((item) => (item.id === id ? { ...item, selected: !item.selected } : item)),
+    );
+  };
+
+  const removeItem = (id: string) => {
+    setItems((current) => {
+      const removed = current.find((item) => item.id === id);
+      if (removed) URL.revokeObjectURL(removed.url);
+      const remaining = current.filter((item) => item.id !== id);
+      if (id === activeId) setActiveId(remaining[0]?.id ?? null);
+      return remaining;
+    });
+    showNotice("图片已移出队列");
+  };
+
+  const clearAll = () => {
+    items.forEach((item) => URL.revokeObjectURL(item.url));
+    setItems([]);
+    setActiveId(null);
+    showNotice("编辑队列已清空");
+  };
+
+  const getExportBlob = async (item: ImageItem) => {
+    const image = new Image();
+    image.src = item.url;
+    await new Promise<void>((resolve, reject) => {
+      image.onload = () => resolve();
+      image.onerror = () => reject(new Error("image-load-failed"));
+    });
+
+    const canvas = document.createElement("canvas");
+    canvas.width = item.width;
+    canvas.height = item.height;
+    const context = canvas.getContext("2d");
+    if (!context) throw new Error("canvas-unavailable");
+
+    context.drawImage(image, 0, 0, item.width, item.height);
+    const margin = Math.max(24, Math.round(Math.min(item.width, item.height) * 0.05));
+    const fontSize = Math.max(16, Math.round(settings.size * Math.max(item.width, item.height) / 820));
+    context.font = `600 ${fontSize}px Arial, sans-serif`;
+    context.fillStyle = settings.color === "light" ? "#ffffff" : "#121518";
+    context.globalAlpha = settings.opacity / 100;
+    context.textBaseline = "middle";
+
+    const [vertical, horizontal] = settings.position.split("-") as [
+      "top" | "middle" | "bottom",
+      "left" | "center" | "right",
+    ];
+    const x = horizontal === "left" ? margin : horizontal === "right" ? item.width - margin : item.width / 2;
+    const y = vertical === "top" ? margin + fontSize / 2 : vertical === "bottom" ? item.height - margin - fontSize / 2 : item.height / 2;
+    context.textAlign = horizontal;
+    context.save();
+    context.translate(x, y);
+    context.rotate((settings.angle * Math.PI) / 180);
+    context.fillText(settings.text || "水印", 0, 0);
+    context.restore();
+
+    const mime = ["image/jpeg", "image/png", "image/webp"].includes(item.file.type)
+      ? item.file.type
+      : "image/png";
+    return new Promise<Blob>((resolve, reject) => {
+      canvas.toBlob((blob) => (blob ? resolve(blob) : reject(new Error("export-failed"))), mime, 1);
+    });
+  };
+
+  const downloadBlob = (blob: Blob, item: ImageItem) => {
+    const url = URL.createObjectURL(blob);
+    const anchor = document.createElement("a");
+    const extension = item.file.name.includes(".") ? item.file.name.split(".").pop() : "png";
+    const baseName = item.file.name.replace(/\.[^/.]+$/, "");
+    anchor.href = url;
+    anchor.download = `${baseName}-watermarked.${extension}`;
+    document.body.appendChild(anchor);
+    anchor.click();
+    anchor.remove();
+    window.setTimeout(() => URL.revokeObjectURL(url), 1000);
+  };
+
+  const downloadSelected = async () => {
+    if (!selectedItems.length || isDownloading) return;
+    setIsDownloading(true);
+    showNotice("正在按原尺寸导出，请稍候…");
+    try {
+      for (const item of selectedItems) {
+        const blob = await getExportBlob(item);
+        downloadBlob(blob, item);
+        await new Promise((resolve) => window.setTimeout(resolve, 180));
+      }
+      showNotice(`${selectedItems.length} 张图片已开始下载`);
+    } catch {
+      showNotice("导出失败，请重试或换一张图片");
+    } finally {
+      setIsDownloading(false);
+    }
+  };
+
+  return (
+    <main className="app-shell">
+      <header className="topbar">
+        <div className="brand-lockup">
+          <div className="brand-mark" aria-hidden="true"><span /><span /></div>
+          <div>
+            <div className="brand-name">Picmark <span>Studio</span></div>
+            <div className="brand-caption">BATCH IMAGE EDITOR</div>
+          </div>
+        </div>
+        <div className="topbar-center"><span className="status-dot" />浏览器本地处理 · 不上传服务器</div>
+        <button className="top-help" type="button" onClick={() => showNotice("文件只在当前浏览器内处理，不会离开你的设备")}>如何工作？ <span>↗</span></button>
+      </header>
+
+      <section className="hero-row">
+        <div>
+          <p className="eyebrow">WORKSPACE / 01</p>
+          <h1>批量给图片<br /><em>加上你的标记</em></h1>
+          <p className="hero-copy">拖入图片，调整一次水印设置，<br className="desktop-break" />所有成片都会保持原始清晰度。</p>
+        </div>
+        <div className="hero-note">
+          <span className="note-number">01</span>
+          <span>适合产品图、作品集<br />社媒内容与品牌素材</span>
+        </div>
+      </section>
+
+      <section className="workspace">
+        <aside className="control-panel">
+          <div className="panel-heading">
+            <div><span className="section-kicker">A</span><h2>水印设置</h2></div>
+            <span className="live-pill"><span />实时</span>
+          </div>
+
+          <label className="field-label" htmlFor="watermark-text">水印文字</label>
+          <div className="text-input-wrap">
+            <input id="watermark-text" value={settings.text} onChange={(event) => updateSettings("text", event.target.value)} maxLength={40} />
+            <span>{settings.text.length}/40</span>
+          </div>
+
+          <div className="control-block">
+            <div className="control-row"><label htmlFor="size">大小</label><output>{settings.size}px</output></div>
+            <input id="size" className="range-input" type="range" min="14" max="64" value={settings.size} onChange={(event) => updateSettings("size", Number(event.target.value))} />
+            <div className="range-hints"><span>小</span><span>大</span></div>
+          </div>
+
+          <div className="control-block">
+            <div className="control-row"><label htmlFor="opacity">透明度</label><output>{settings.opacity}%</output></div>
+            <input id="opacity" className="range-input" type="range" min="10" max="100" value={settings.opacity} onChange={(event) => updateSettings("opacity", Number(event.target.value))} />
+            <div className="range-hints"><span>透明</span><span>实色</span></div>
+          </div>
+
+          <div className="control-block">
+            <div className="control-row"><label htmlFor="angle">方向</label><output>{formatAngle(settings.angle)}</output></div>
+            <input id="angle" className="range-input" type="range" min="-45" max="45" value={settings.angle} onChange={(event) => updateSettings("angle", Number(event.target.value))} />
+            <div className="range-hints"><span>−45°</span><span>0°</span><span>+45°</span></div>
+          </div>
+
+          <div className="control-block position-block">
+            <div className="control-row"><span>位置</span><output>{positionMap.find((item) => item.key === settings.position)?.label}</output></div>
+            <div className="position-grid" role="radiogroup" aria-label="水印位置">
+              {positionMap.map((item) => (
+                <button key={item.key} type="button" className={settings.position === item.key ? "position-btn is-active" : "position-btn"} onClick={() => updateSettings("position", item.key)} aria-label={item.label} aria-pressed={settings.position === item.key}>
+                  <span />
+                </button>
+              ))}
+            </div>
+          </div>
+
+          <div className="control-block color-block">
+            <div className="control-row"><span>颜色</span><output>{settings.color === "light" ? "浅色" : "深色"}</output></div>
+            <div className="color-options">
+              <button type="button" className={settings.color === "light" ? "color-choice is-active" : "color-choice"} onClick={() => updateSettings("color", "light")}><span className="swatch swatch-light" />浅色</button>
+              <button type="button" className={settings.color === "dark" ? "color-choice is-active" : "color-choice"} onClick={() => updateSettings("color", "dark")}><span className="swatch swatch-dark" />深色</button>
+            </div>
+          </div>
+
+          <div className="privacy-card"><span className="privacy-icon">✦</span><div><strong>你的文件不会被上传</strong><p>所有图片处理都在当前设备完成。</p></div></div>
+        </aside>
+
+        <div className="editor-panel">
+          <div className="editor-toolbar">
+            <div className="toolbar-title"><span className="section-kicker">B</span><div><h2>图片预览</h2><p>{items.length ? `${selectedItems.length} / ${items.length} 张已选中` : "还没有图片"}</p></div></div>
+            {items.length > 0 && <button type="button" className="clear-button" onClick={clearAll}>清空全部 <span>×</span></button>}
+          </div>
+
+          {items.length === 0 ? (
+            <div className={isDragging ? "upload-zone is-dragging" : "upload-zone"} onDragEnter={(event) => { event.preventDefault(); setIsDragging(true); }} onDragOver={(event) => event.preventDefault()} onDragLeave={() => setIsDragging(false)} onDrop={onDrop}>
+              <input ref={fileInputRef} type="file" accept="image/jpeg,image/png,image/webp" multiple onChange={onFileChange} />
+              <div className="upload-icon"><span>＋</span></div>
+              <h3>把图片拖到这里</h3>
+              <p>一次选择多张图片，或</p>
+              <button type="button" className="browse-button" onClick={() => fileInputRef.current?.click()}>从设备选择图片 <span>↗</span></button>
+              <div className="upload-meta"><span>JPG</span><span>PNG</span><span>WEBP</span><i />单张最大 25 MB</div>
+            </div>
+          ) : (
+            <div className="preview-layout">
+              <div className="preview-stage">
+                {activeItem && <div className="canvas-frame" style={{ aspectRatio: `${activeItem.width} / ${activeItem.height}` }}><img src={activeItem.url} alt={activeItem.file.name} /><span className="preview-watermark" style={watermarkStyle(settings)}>{settings.text || "水印"}</span><div className="frame-badge">预览</div></div>}
+                <div className="stage-footer"><span>{activeItem?.file.name}</span><span>{activeItem ? `${activeItem.width} × ${activeItem.height} · ${formatBytes(activeItem.file.size)}` : ""}</span></div>
+              </div>
+              <div className="thumb-strip">
+                {items.map((item, index) => <div key={item.id} className={item.id === activeItem?.id ? "thumb-card is-active" : "thumb-card"}>
+                  <button type="button" className="thumb-select" onClick={() => toggleItem(item.id)} aria-label={`${item.selected ? "取消选择" : "选择"} ${item.file.name}`} aria-pressed={item.selected}>{item.selected ? "✓" : ""}</button>
+                  <button type="button" className="thumb-image-button" onClick={() => setActiveId(item.id)}><img src={item.url} alt={`第 ${index + 1} 张：${item.file.name}`} /></button>
+                  <div className="thumb-meta"><span>{String(index + 1).padStart(2, "0")}</span><button type="button" onClick={() => removeItem(item.id)} aria-label={`移除 ${item.file.name}`}>×</button></div>
+                </div>)}
+                <button type="button" className="add-more-card" onClick={() => fileInputRef.current?.click()}><span>＋</span><small>继续添加</small></button>
+                <input ref={fileInputRef} className="visually-hidden" type="file" accept="image/jpeg,image/png,image/webp" multiple onChange={onFileChange} />
+              </div>
+            </div>
+          )}
+
+          <div className="editor-footer">
+            <div className="footer-status"><span className="status-icon">↗</span><div><strong>{notice}</strong><small>{items.length ? "调整设置会同步应用到选中的图片" : "支持批量上传 · 处理过程无需联网"}</small></div></div>
+            <div className="footer-actions"><button type="button" className="secondary-button" onClick={() => { setItems((current) => current.map((item) => ({ ...item, selected: true }))); showNotice("已选中全部图片"); }} disabled={!items.length}>应用到全部</button><button type="button" className="download-button" onClick={() => void downloadSelected()} disabled={!selectedItems.length || isDownloading}><span>{isDownloading ? "导出中…" : "下载全部"}</span><b>↓</b></button></div>
+          </div>
+        </div>
+      </section>
+
+      <footer className="page-footer"><span>© 2025 Picmark Studio</span><span>原图尺寸导出 · 无质量压缩</span><span>Made for your workflow <b>↗</b></span></footer>
+    </main>
+  );
+}
