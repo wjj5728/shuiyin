@@ -12,6 +12,7 @@ type ImageItem = {
   height: number;
   selected: boolean;
   settings: Settings;
+  settingsCustomized: boolean;
 };
 
 type WatermarkImage = {
@@ -44,6 +45,22 @@ const initialSettings: Settings = {
   x: 78,
   y: 80,
 };
+
+function getInitialSettings(imageWidth: number, imageHeight: number, watermarkWidth?: number, watermarkHeight?: number) {
+  if (typeof window === "undefined" || window.innerWidth > 600 || !watermarkWidth || !watermarkHeight) {
+    return { ...initialSettings };
+  }
+
+  const frameAspect = imageWidth / imageHeight;
+  const watermarkAspect = watermarkHeight / watermarkWidth;
+  const mobileMaxSize = 16;
+  const heightLimitedSize = (mobileMaxSize * frameAspect) / watermarkAspect;
+
+  return {
+    ...initialSettings,
+    size: Math.max(8, Math.min(initialSettings.size, mobileMaxSize, heightLimitedSize)),
+  };
+}
 
 type WatermarkPreset = {
   name: string;
@@ -190,13 +207,22 @@ export default function Home() {
     }
 
     const results = await Promise.allSettled(
-      imageFiles.map(async (file) => ({
-        ...(await loadImageAsset(file)),
-        id: `${file.name}-${file.lastModified}-${Math.random()}`,
-        file,
-        selected: true,
-        settings: { ...initialSettings },
-      })),
+      imageFiles.map(async (file) => {
+        const loaded = await loadImageAsset(file);
+        return {
+          ...loaded,
+          id: `${file.name}-${file.lastModified}-${Math.random()}`,
+          file,
+          selected: true,
+          settingsCustomized: false,
+          settings: getInitialSettings(
+            loaded.width,
+            loaded.height,
+            watermark?.width,
+            watermark?.height,
+          ),
+        };
+      }),
     );
     const loaded = results.flatMap((result) =>
       result.status === "fulfilled" ? [result.value] : [],
@@ -230,6 +256,16 @@ export default function Home() {
         if (current) URL.revokeObjectURL(current.url);
         return { ...loaded, file };
       });
+      setItems((current) =>
+        current.map((item) =>
+          !item.settingsCustomized
+            ? {
+                ...item,
+                settings: getInitialSettings(item.width, item.height, loaded.width, loaded.height),
+              }
+            : item,
+        ),
+      );
       showNotice(message);
     } catch {
       showNotice("水印图片读取失败，请重试");
@@ -298,7 +334,7 @@ export default function Home() {
     setItems((current) =>
       current.map((item) =>
         item.id === itemId
-          ? { ...item, settings: { ...item.settings, [key]: value } }
+          ? { ...item, settings: { ...item.settings, [key]: value }, settingsCustomized: true }
           : item,
       ),
     );
@@ -329,6 +365,7 @@ export default function Home() {
                 x: clamp((x + width / 2) / frameSize.width * 100, halfWidth, 100 - halfWidth),
                 y: clamp((y + height / 2) / frameSize.height * 100, halfHeight, 100 - halfHeight),
               },
+              settingsCustomized: true,
             }
           : item,
       ),
