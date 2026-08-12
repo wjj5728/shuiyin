@@ -56,6 +56,21 @@ const watermarkPresets: WatermarkPreset[] = [
     src: "/watermarks/stamp-red.png",
     fileName: "红色印章.png",
   },
+  {
+    name: "红色圆章｜已售",
+    src: "/watermarks/sold-red.png",
+    fileName: "红色圆章-已售.png",
+  },
+  {
+    name: "蓝色标签｜已售",
+    src: "/watermarks/sold-blue.png",
+    fileName: "蓝色标签-已售.png",
+  },
+  {
+    name: "金色手绘｜已售",
+    src: "/watermarks/sold-gold.png",
+    fileName: "金色手绘-已售.png",
+  },
 ];
 
 function formatBytes(bytes: number) {
