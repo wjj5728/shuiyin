@@ -1,6 +1,42 @@
 import assert from "node:assert/strict";
 import { access, readFile } from "node:fs/promises";
 import test from "node:test";
+import { strFromU8, unzipSync } from "fflate";
+import { createZipBlob, getZipFileName } from "../lib/export-zip.js";
+import { constrainSettingsToImage, rotatedBoundingBox } from "../lib/watermark-geometry.js";
+
+test("creates a ZIP archive with unique exported filenames", async () => {
+  const archive = await createZipBlob([
+    { name: "sample.png", blob: new Blob(["first"]) },
+    { name: "sample.png", blob: new Blob(["second"]) },
+  ]);
+  const files = unzipSync(new Uint8Array(await archive.arrayBuffer()));
+
+  assert.equal(archive.type, "application/zip");
+  assert.deepEqual(Object.keys(files).sort(), ["sample-2.png", "sample.png"]);
+  assert.equal(strFromU8(files["sample.png"]), "first");
+  assert.equal(strFromU8(files["sample-2.png"]), "second");
+  assert.equal(getZipFileName(new Date(2026, 7, 13, 9, 5)), "picmark-export-20260813-0905.zip");
+});
+
+test("keeps a large rotated watermark inside the image bounds", () => {
+  const settings = constrainSettingsToImage(1000, 1000, 1000, 1000, {
+    size: 90,
+    opacity: 80,
+    angle: 45,
+    x: 95,
+    y: 95,
+  });
+  const renderedSize = 1000 * (settings.size / 100);
+  const bounds = rotatedBoundingBox(renderedSize, renderedSize, settings.angle);
+
+  assert.ok(bounds.width <= 1000.0001);
+  assert.ok(bounds.height <= 1000.0001);
+  assert.ok(settings.x - (bounds.width / 1000) * 50 >= -0.0001);
+  assert.ok(settings.x + (bounds.width / 1000) * 50 <= 100.0001);
+  assert.ok(settings.y - (bounds.height / 1000) * 50 >= -0.0001);
+  assert.ok(settings.y + (bounds.height / 1000) * 50 <= 100.0001);
+});
 
 test("creates a production build for Picmark Studio", async () => {
   await Promise.all([
@@ -9,6 +45,8 @@ test("creates a production build for Picmark Studio", async () => {
     access(new URL("../public/sw.js", import.meta.url)),
     access(new URL("../public/icon-192.png", import.meta.url)),
     access(new URL("../public/icon-512.png", import.meta.url)),
+    access(new URL("../public/icon-1024.png", import.meta.url)),
+    access(new URL("../public/apple-touch-icon.png", import.meta.url)),
     access(new URL("../public/watermarks/stamp-red.png", import.meta.url)),
     access(new URL("../public/watermarks/sold-red.png", import.meta.url)),
     access(new URL("../public/watermarks/sold-blue.png", import.meta.url)),
@@ -41,6 +79,10 @@ test("creates a production build for Picmark Studio", async () => {
   assert.match(page, /navigator\.serviceWorker\.register\("\/sw\.js"/);
   assert.match(page, /beforeinstallprompt/);
   assert.match(page, /安装到桌面/);
+  assert.match(page, /picmark-install-dismissed-at/);
+  assert.match(page, /maxImageFileSize/);
+  assert.match(page, /maxImagePixelCount/);
+  assert.match(page, /maxZipOutputSize/);
   assert.match(page, /点击素材会替换当前水印/);
   assert.match(page, /key=\{watermark\.url\}/);
   assert.match(page, /aria-pressed=\{watermark\?\.file\.name === preset\.fileName\}/);
@@ -58,7 +100,16 @@ test("creates a production build for Picmark Studio", async () => {
   assert.match(page, /item\.settings\.x/);
   assert.match(page, /item\.settings\.y/);
   assert.match(page, /item\.settings\.angle/);
-  assert.match(page, /每张图片独立保存大小、位置和旋转/);
+  assert.match(page, /每张图片可独立调整/);
+  assert.match(page, /applyActiveSettingsToAll/);
+  assert.match(page, /下载已选/);
+  assert.match(page, /\[exportAsZip, setExportAsZip\] = useState\(true\)/);
+  assert.match(page, /批量导出为 ZIP/);
+  assert.match(page, /createZipBlob/);
+  assert.match(page, /mobile-adjust-panel/);
+  assert.match(page, /rotatedBoundingBox/);
+  assert.match(page, /exportCancelledRef/);
+  assert.match(page, /停止导出/);
   assert.match(page, /mobileMaxSize = 16/);
   assert.match(page, /getInitialSettings\(item\.width, item\.height, loaded\.width, loaded\.height\)/);
   assert.match(page, /watermark-rotate-handle/);

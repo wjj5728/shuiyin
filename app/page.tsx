@@ -1,8 +1,10 @@
 "use client";
 
 import { Rnd } from "react-rnd";
-import type { ChangeEvent, DragEvent, PointerEvent as ReactPointerEvent } from "react";
+import type { CSSProperties, ChangeEvent, DragEvent, PointerEvent as ReactPointerEvent } from "react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { createZipBlob, getZipFileName } from "@/lib/export-zip";
+import { constrainSettingsToImage, rotatedBoundingBox } from "@/lib/watermark-geometry";
 
 type ImageItem = {
   id: string;
@@ -51,20 +53,26 @@ const initialSettings: Settings = {
   y: 80,
 };
 
+const acceptedImageTypes = new Set(["image/jpeg", "image/png", "image/webp"]);
+const maxImageFileSize = 25 * 1024 * 1024;
+const maxImagePixelCount = 32_000_000;
+const maxZipOutputSize = 250 * 1024 * 1024;
+const installDismissedAtKey = "picmark-install-dismissed-at";
+const installReminderDelay = 7 * 24 * 60 * 60 * 1000;
+
 function getInitialSettings(imageWidth: number, imageHeight: number, watermarkWidth?: number, watermarkHeight?: number) {
-  if (typeof window === "undefined" || window.innerWidth > 600 || !watermarkWidth || !watermarkHeight) {
-    return { ...initialSettings };
+  const settings = { ...initialSettings };
+  if (typeof window !== "undefined" && window.innerWidth <= 600 && watermarkWidth && watermarkHeight) {
+    const frameAspect = imageWidth / imageHeight;
+    const watermarkAspect = watermarkHeight / watermarkWidth;
+    const mobileMaxSize = 16;
+    const heightLimitedSize = (mobileMaxSize * frameAspect) / watermarkAspect;
+    settings.size = Math.max(8, Math.min(initialSettings.size, mobileMaxSize, heightLimitedSize));
   }
 
-  const frameAspect = imageWidth / imageHeight;
-  const watermarkAspect = watermarkHeight / watermarkWidth;
-  const mobileMaxSize = 16;
-  const heightLimitedSize = (mobileMaxSize * frameAspect) / watermarkAspect;
-
-  return {
-    ...initialSettings,
-    size: Math.max(8, Math.min(initialSettings.size, mobileMaxSize, heightLimitedSize)),
-  };
+  return watermarkWidth && watermarkHeight
+    ? constrainSettingsToImage(imageWidth, imageHeight, watermarkWidth, watermarkHeight, settings)
+    : settings;
 }
 
 type WatermarkPreset = {
@@ -129,6 +137,17 @@ function clamp(value: number, min: number, max: number) {
   return Math.min(Math.max(value, min), max);
 }
 
+function rangeStyle(value: number, min: number, max: number) {
+  const progress = ((clamp(value, min, max) - min) / (max - min)) * 100;
+  return { "--range-progress": `${progress}%` } as CSSProperties;
+}
+
+function getExportFileName(item: ImageItem) {
+  const extension = item.file.name.includes(".") ? item.file.name.split(".").pop() : "png";
+  const baseName = item.file.name.replace(/\.[^/.]+$/, "");
+  return `${baseName}-watermarked.${extension}`;
+}
+
 function pointerAngle(clientX: number, clientY: number, centerX: number, centerY: number) {
   return (Math.atan2(clientY - centerY, clientX - centerX) * 180) / Math.PI;
 }
@@ -144,12 +163,18 @@ function loadImageAsset(file: File): Promise<Omit<WatermarkImage, "file">> {
   return new Promise((resolve, reject) => {
     const url = URL.createObjectURL(file);
     const image = new Image();
-    image.onload = () =>
+    image.onload = () => {
+      if (image.naturalWidth * image.naturalHeight > maxImagePixelCount) {
+        URL.revokeObjectURL(url);
+        reject(new Error("image-too-large"));
+        return;
+      }
       resolve({
         url,
         width: image.naturalWidth,
         height: image.naturalHeight,
       });
+    };
     image.onerror = () => {
       URL.revokeObjectURL(url);
       reject(new Error("image-load-failed"));
@@ -166,6 +191,8 @@ export default function Home() {
   const [isWatermarkDragging, setIsWatermarkDragging] = useState(false);
   const [showWatermarkPresets, setShowWatermarkPresets] = useState(false);
   const [isDownloading, setIsDownloading] = useState(false);
+  const [exportAsZip, setExportAsZip] = useState(true);
+  const [mobileControlsOpen, setMobileControlsOpen] = useState(false);
   const [notice, setNotice] = useState("准备好了，拖入图片开始编辑");
   const [showInstallCard, setShowInstallCard] = useState(false);
   const [installHelpOpen, setInstallHelpOpen] = useState(false);
@@ -177,6 +204,10 @@ export default function Home() {
   const rotationInteractionRef = useRef<RotationInteraction | null>(null);
   const watermarkLoadIdRef = useRef(0);
   const activeIdRef = useRef<string | null>(null);
+  const noticeTimerRef = useRef<number | null>(null);
+  const exportCancelledRef = useRef(false);
+  const itemsRef = useRef<ImageItem[]>([]);
+  const watermarkRef = useRef<WatermarkImage | null>(null);
   const [frameSize, setFrameSize] = useState({ width: 0, height: 0 });
 
   const activeItem = useMemo(
@@ -184,11 +215,20 @@ export default function Home() {
     [activeId, items],
   );
   const selectedItems = useMemo(() => items.filter((item) => item.selected), [items]);
+  const allItemsSelected = items.length > 0 && selectedItems.length === items.length;
   const settings = activeItem?.settings ?? initialSettings;
 
   useEffect(() => {
     activeIdRef.current = activeItem?.id ?? null;
   }, [activeItem?.id]);
+
+  useEffect(() => {
+    itemsRef.current = items;
+  }, [items]);
+
+  useEffect(() => {
+    watermarkRef.current = watermark;
+  }, [watermark]);
 
   useEffect(() => {
     const standalone = window.matchMedia("(display-mode: standalone)").matches
@@ -203,10 +243,21 @@ export default function Home() {
       void navigator.serviceWorker.register("/sw.js", { scope: "/" }).catch(() => undefined);
     }
 
+    const installWasRecentlyDismissed = () => {
+      try {
+        const dismissedAt = Number(window.localStorage.getItem(installDismissedAtKey));
+        return dismissedAt > 0 && Date.now() - dismissedAt < installReminderDelay;
+      } catch {
+        return false;
+      }
+    };
+    const revealInstallCard = () => {
+      if (!installWasRecentlyDismissed()) setShowInstallCard(true);
+    };
+
     const handleBeforeInstallPrompt = (event: Event) => {
       event.preventDefault();
       setInstallPromptEvent(event as BeforeInstallPromptEvent);
-      if (mobile && !standalone) setShowInstallCard(true);
     };
     const handleAppInstalled = () => {
       setInstallPromptEvent(null);
@@ -216,7 +267,7 @@ export default function Home() {
     window.addEventListener("beforeinstallprompt", handleBeforeInstallPrompt);
     window.addEventListener("appinstalled", handleAppInstalled);
     const timer = mobile && !standalone
-      ? window.setTimeout(() => setShowInstallCard(true), 900)
+      ? window.setTimeout(revealInstallCard, 6000)
       : undefined;
 
     return () => {
@@ -225,6 +276,12 @@ export default function Home() {
       if (timer) window.clearTimeout(timer);
       window.clearTimeout(iosTimer);
     };
+  }, []);
+
+  useEffect(() => () => {
+    if (noticeTimerRef.current !== null) window.clearTimeout(noticeTimerRef.current);
+    itemsRef.current.forEach((item) => URL.revokeObjectURL(item.url));
+    if (watermarkRef.current) URL.revokeObjectURL(watermarkRef.current.url);
   }, []);
 
   useEffect(() => {
@@ -240,15 +297,32 @@ export default function Home() {
     return () => observer.disconnect();
   }, [activeItem?.id]);
 
-  const showNotice = (message: string) => {
+  const showNotice = (message: string, persistent = false) => {
+    if (noticeTimerRef.current !== null) window.clearTimeout(noticeTimerRef.current);
     setNotice(message);
-    window.setTimeout(() => setNotice("浏览器本地处理 · 不上传服务器"), 3200);
+    if (persistent) {
+      noticeTimerRef.current = null;
+      return;
+    }
+    noticeTimerRef.current = window.setTimeout(() => {
+      setNotice("浏览器本地处理 · 不上传服务器");
+      noticeTimerRef.current = null;
+    }, 3200);
+  };
+
+  const dismissInstallCard = () => {
+    setShowInstallCard(false);
+    setInstallHelpOpen(false);
+    try {
+      window.localStorage.setItem(installDismissedAtKey, String(Date.now()));
+    } catch {
+      // Storage can be unavailable in strict privacy modes; hiding still works for this visit.
+    }
   };
 
   const installApp = async () => {
     if (installHelpOpen) {
-      setShowInstallCard(false);
-      setInstallHelpOpen(false);
+      dismissInstallCard();
       return;
     }
 
@@ -258,16 +332,21 @@ export default function Home() {
     }
 
     await installPromptEvent.prompt();
-    await installPromptEvent.userChoice;
+    const choice = await installPromptEvent.userChoice;
     setInstallPromptEvent(null);
     setShowInstallCard(false);
     setInstallHelpOpen(false);
+    if (choice.outcome === "dismissed") dismissInstallCard();
   };
 
   const addFiles = async (fileList: FileList | File[]) => {
-    const imageFiles = Array.from(fileList).filter((file) => file.type.startsWith("image/"));
+    const candidates = Array.from(fileList);
+    const imageFiles = candidates.filter(
+      (file) => acceptedImageTypes.has(file.type) && file.size <= maxImageFileSize,
+    );
     if (!imageFiles.length) {
-      showNotice("请选择 JPG、PNG 或 WebP 图片");
+      const hasOversizedFile = candidates.some((file) => file.size > maxImageFileSize);
+      showNotice(hasOversizedFile ? "单张图片不能超过 25 MB" : "请选择 JPG、PNG 或 WebP 图片");
       return;
     }
 
@@ -294,17 +373,23 @@ export default function Home() {
     );
 
     if (!loaded.length) {
-      showNotice("图片读取失败，请重试或更换图片");
+      const hasTooLargeImage = results.some(
+        (result) => result.status === "rejected" && result.reason instanceof Error && result.reason.message === "image-too-large",
+      );
+      showNotice(hasTooLargeImage ? "图片像素过大，请选择不超过 3200 万像素的图片" : "图片读取失败，请重试或更换图片");
       return;
     }
 
     setItems((current) => [...current, ...loaded]);
     setActiveId((current) => current ?? loaded[0]?.id ?? null);
     const failedCount = results.length - loaded.length;
+    const skippedCount = candidates.length - imageFiles.length;
     showNotice(
       failedCount
         ? `${loaded.length} 张图片已加入，${failedCount} 张读取失败`
-        : `${loaded.length} 张图片已加入编辑队列`,
+        : skippedCount
+          ? `${loaded.length} 张图片已加入，${skippedCount} 张格式或大小不符合要求`
+          : `${loaded.length} 张图片已加入编辑队列`,
     );
   };
 
@@ -331,16 +416,23 @@ export default function Home() {
             : item,
         ),
       );
+      if (activeIdRef.current && window.matchMedia("(max-width: 600px)").matches) {
+        setMobileControlsOpen(true);
+      }
       showNotice(message);
     } catch {
-      showNotice("水印图片读取失败，请重试");
+      showNotice("水印图片读取失败；请确认格式正确且不超过 3200 万像素");
     }
   };
 
   const addWatermark = async (fileList: FileList | File[]) => {
-    const file = Array.from(fileList).find((candidate) => candidate.type.startsWith("image/"));
+    const candidates = Array.from(fileList);
+    const file = candidates.find(
+      (candidate) => acceptedImageTypes.has(candidate.type) && candidate.size <= maxImageFileSize,
+    );
     if (!file) {
-      showNotice("请选择 PNG、JPG 或 WebP 水印图片");
+      const hasOversizedFile = candidates.some((candidate) => candidate.size > maxImageFileSize);
+      showNotice(hasOversizedFile ? "水印图片不能超过 25 MB" : "请选择 PNG、JPG 或 WebP 水印图片");
       return;
     }
 
@@ -390,17 +482,29 @@ export default function Home() {
       if (current) URL.revokeObjectURL(current.url);
       return null;
     });
+    setMobileControlsOpen(false);
     showNotice("水印图片已移除");
   };
 
   const updateSettings = <K extends keyof Settings>(key: K, value: Settings[K]) => {
     const itemId = activeIdRef.current;
     if (!itemId) return;
+    const currentWatermark = watermarkRef.current;
     setItems((current) =>
       current.map((item) =>
-        item.id === itemId
-          ? { ...item, settings: { ...item.settings, [key]: value }, settingsCustomized: true }
-          : item,
+        item.id === itemId ? {
+          ...item,
+          settings: currentWatermark
+            ? constrainSettingsToImage(
+                item.width,
+                item.height,
+                currentWatermark.width,
+                currentWatermark.height,
+                { ...item.settings, [key]: value },
+              )
+            : { ...item.settings, [key]: value },
+          settingsCustomized: true,
+        } : item,
       ),
     );
   };
@@ -416,8 +520,9 @@ export default function Home() {
 
   const updateWatermarkPosition = (x: number, y: number, width = renderedWatermarkSize?.width, height = renderedWatermarkSize?.height) => {
     if (!frameSize.width || !frameSize.height || !width || !height) return;
-    const halfWidth = (width / frameSize.width) * 50;
-    const halfHeight = (height / frameSize.height) * 50;
+    const rotatedBounds = rotatedBoundingBox(width, height, settings.angle);
+    const halfWidth = Math.min(50, (rotatedBounds.width / frameSize.width) * 50);
+    const halfHeight = Math.min(50, (rotatedBounds.height / frameSize.height) * 50);
     const itemId = activeIdRef.current;
     if (!itemId) return;
     setItems((current) =>
@@ -520,6 +625,19 @@ export default function Home() {
     );
   };
 
+  const activateItem = (id: string) => {
+    setActiveId(id);
+    setItems((current) => current.map((item) =>
+      item.id === id && !item.selected ? { ...item, selected: true } : item,
+    ));
+  };
+
+  const toggleAllItems = () => {
+    const nextSelected = !allItemsSelected;
+    setItems((current) => current.map((item) => ({ ...item, selected: nextSelected })));
+    showNotice(nextSelected ? "已选中全部图片" : "已取消选择全部图片");
+  };
+
   const removeItem = (id: string) => {
     setItems((current) => {
       const removed = current.find((item) => item.id === id);
@@ -535,7 +653,28 @@ export default function Home() {
     items.forEach((item) => URL.revokeObjectURL(item.url));
     setItems([]);
     setActiveId(null);
+    setMobileControlsOpen(false);
     showNotice("编辑队列已清空");
+  };
+
+  const applyActiveSettingsToAll = () => {
+    if (!activeItem || items.length < 2) return;
+    const sharedSettings = { ...activeItem.settings };
+    const currentWatermark = watermarkRef.current;
+    setItems((current) => current.map((item) => ({
+      ...item,
+      settings: currentWatermark
+        ? constrainSettingsToImage(
+            item.width,
+            item.height,
+            currentWatermark.width,
+            currentWatermark.height,
+            { ...sharedSettings },
+          )
+        : { ...sharedSettings },
+      settingsCustomized: true,
+    })));
+    showNotice(`已将当前设置应用到 ${items.length} 张图片`);
   };
 
   const getExportBlob = async (item: ImageItem) => {
@@ -587,17 +726,20 @@ export default function Home() {
       ? item.file.type
       : "image/png";
     return new Promise<Blob>((resolve, reject) => {
-      canvas.toBlob((blob) => (blob ? resolve(blob) : reject(new Error("export-failed"))), mime, 1);
+      canvas.toBlob((blob) => {
+        canvas.width = 1;
+        canvas.height = 1;
+        if (blob) resolve(blob);
+        else reject(new Error("export-failed"));
+      }, mime, 1);
     });
   };
 
-  const downloadBlob = (blob: Blob, item: ImageItem) => {
+  const downloadBlob = (blob: Blob, fileName: string) => {
     const url = URL.createObjectURL(blob);
     const anchor = document.createElement("a");
-    const extension = item.file.name.includes(".") ? item.file.name.split(".").pop() : "png";
-    const baseName = item.file.name.replace(/\.[^/.]+$/, "");
     anchor.href = url;
-    anchor.download = `${baseName}-watermarked.${extension}`;
+    anchor.download = fileName;
     document.body.appendChild(anchor);
     anchor.click();
     anchor.remove();
@@ -609,26 +751,69 @@ export default function Home() {
       if (!watermark && selectedItems.length) showNotice("请先上传水印图片");
       return;
     }
+    exportCancelledRef.current = false;
     setIsDownloading(true);
-    showNotice("正在按原尺寸导出，请稍候…");
+    showNotice("正在按原尺寸导出，请稍候…", true);
     try {
-      for (const item of selectedItems) {
+      const exportedFiles: Array<{ name: string; blob: Blob }> = [];
+      let zipOutputSize = 0;
+      for (const [index, item] of selectedItems.entries()) {
+        if (exportCancelledRef.current) throw new Error("export-cancelled");
+        showNotice(`正在导出 ${index + 1} / ${selectedItems.length}：${item.file.name}`, true);
         const blob = await getExportBlob(item);
-        downloadBlob(blob, item);
-        await new Promise((resolve) => window.setTimeout(resolve, 180));
+        if (exportCancelledRef.current) throw new Error("export-cancelled");
+        const fileName = getExportFileName(item);
+        if (exportAsZip && selectedItems.length > 1) {
+          zipOutputSize += blob.size;
+          if (zipOutputSize > maxZipOutputSize) throw new Error("zip-too-large");
+          exportedFiles.push({ name: fileName, blob });
+        } else {
+          downloadBlob(blob, fileName);
+          await new Promise((resolve) => window.setTimeout(resolve, 180));
+        }
       }
-      showNotice(`${selectedItems.length} 张图片已开始下载`);
-    } catch {
-      showNotice("导出失败，请重试或换一张图片");
+
+      if (exportAsZip && selectedItems.length > 1) {
+        showNotice("正在打包 ZIP…", true);
+        const archive = await createZipBlob(exportedFiles);
+        if (exportCancelledRef.current) throw new Error("export-cancelled");
+        downloadBlob(archive, getZipFileName());
+        showNotice(`${selectedItems.length} 张图片已打包为 ZIP`);
+      } else {
+        showNotice(`${selectedItems.length} 张图片已开始下载`);
+      }
+    } catch (error) {
+      showNotice(error instanceof Error && error.message === "export-cancelled"
+        ? "已停止导出"
+        : error instanceof Error && error.message === "zip-too-large"
+          ? "ZIP 超过 250 MB，请减少图片或关闭 ZIP 后逐张下载"
+          : "导出失败，请重试或换一张图片");
     } finally {
       setIsDownloading(false);
     }
   };
 
+  const cancelExport = () => {
+    exportCancelledRef.current = true;
+    showNotice("正在停止导出…", true);
+  };
+
   return (
     <main className="app-shell">
+      <header className="topbar">
+        <div className="brand-lockup">
+          <div className="brand-mark" aria-hidden="true"><span /><span /></div>
+          <div>
+            <div className="brand-name">Picmark <span>Studio</span></div>
+            <div className="brand-caption">BATCH IMAGE EDITOR</div>
+          </div>
+        </div>
+        <div className="topbar-center"><span className="status-dot" />浏览器本地处理 · 不上传服务器</div>
+        <button className="top-help" type="button" onClick={() => showNotice("文件只在当前浏览器内处理，不会离开你的设备")}>如何工作？ <span>↗</span></button>
+      </header>
+
       {showInstallCard && (
-        <aside className="install-card" role="dialog" aria-label="安装 Picmark Studio">
+        <aside className="install-card" role="region" aria-label="安装 Picmark Studio">
           <div className="install-card-icon" aria-hidden="true">＋</div>
           <div className="install-card-copy">
             <strong>安装到桌面</strong>
@@ -644,21 +829,10 @@ export default function Home() {
             <button type="button" className="install-button" onClick={() => void installApp()}>
               {installHelpOpen ? "知道了" : installPromptEvent ? "立即安装" : "查看方法"}
             </button>
-            <button type="button" className="install-dismiss" onClick={() => setShowInstallCard(false)}>稍后</button>
+            <button type="button" className="install-dismiss" onClick={dismissInstallCard}>稍后</button>
           </div>
         </aside>
       )}
-      <header className="topbar">
-        <div className="brand-lockup">
-          <div className="brand-mark" aria-hidden="true"><span /><span /></div>
-          <div>
-            <div className="brand-name">Picmark <span>Studio</span></div>
-            <div className="brand-caption">BATCH IMAGE EDITOR</div>
-          </div>
-        </div>
-        <div className="topbar-center"><span className="status-dot" />浏览器本地处理 · 不上传服务器</div>
-        <button className="top-help" type="button" onClick={() => showNotice("文件只在当前浏览器内处理，不会离开你的设备")}>如何工作？ <span>↗</span></button>
-      </header>
 
       <section className="hero-row">
         <div>
@@ -672,7 +846,7 @@ export default function Home() {
         </div>
       </section>
 
-      <section className="workspace">
+      <section className={`workspace ${items.length ? "has-items" : "is-empty"}${watermark ? " has-watermark" : ""}`}>
         <aside className="control-panel">
           <div className="panel-heading">
             <div><span className="section-kicker">A</span><h2>水印设置</h2></div>
@@ -680,25 +854,7 @@ export default function Home() {
           </div>
 
           <label className="field-label" htmlFor="watermark-image">水印图片</label>
-          <div
-            className={`watermark-upload${isWatermarkDragging ? " is-dragging" : ""}${watermark ? " has-image" : ""}`}
-            role="button"
-            tabIndex={0}
-            onClick={() => watermarkInputRef.current?.click()}
-            onKeyDown={(event) => {
-              if (event.key === "Enter" || event.key === " ") {
-                event.preventDefault();
-                watermarkInputRef.current?.click();
-              }
-            }}
-            onDragEnter={(event) => {
-              event.preventDefault();
-              setIsWatermarkDragging(true);
-            }}
-            onDragOver={(event) => event.preventDefault()}
-            onDragLeave={() => setIsWatermarkDragging(false)}
-            onDrop={onWatermarkDrop}
-          >
+          <div className="watermark-upload-wrap">
             <input
               ref={watermarkInputRef}
               id="watermark-image"
@@ -708,33 +864,44 @@ export default function Home() {
               onClick={(event) => event.stopPropagation()}
               onChange={onWatermarkChange}
             />
-            {watermark ? (
-              <>
-                <img className="watermark-thumb" src={watermark.url} alt="" />
-                <div className="watermark-file-info">
-                  <strong>{watermark.file.name}</strong>
-                  <span>{watermark.width} × {watermark.height} · {formatBytes(watermark.file.size)}</span>
-                </div>
-                <button
-                  type="button"
-                  className="watermark-remove"
-                  onClick={(event) => {
-                    event.stopPropagation();
-                    clearWatermark();
-                  }}
-                >
-                  移除
-                </button>
-              </>
-            ) : (
-              <>
-                <span className="watermark-upload-icon">＋</span>
-                <div>
-                  <strong>上传水印图片</strong>
-                  <p>拖入透明 PNG，或点击选择</p>
-                </div>
-              </>
-            )}
+            <div
+              className={`watermark-upload${isWatermarkDragging ? " is-dragging" : ""}${watermark ? " has-image" : ""}`}
+              role="button"
+              tabIndex={0}
+              onClick={() => watermarkInputRef.current?.click()}
+              onKeyDown={(event) => {
+                if (event.key === "Enter" || event.key === " ") {
+                  event.preventDefault();
+                  watermarkInputRef.current?.click();
+                }
+              }}
+              onDragEnter={(event) => {
+                event.preventDefault();
+                setIsWatermarkDragging(true);
+              }}
+              onDragOver={(event) => event.preventDefault()}
+              onDragLeave={() => setIsWatermarkDragging(false)}
+              onDrop={onWatermarkDrop}
+            >
+              {watermark ? (
+                <>
+                  <img className="watermark-thumb" src={watermark.url} alt="" />
+                  <div className="watermark-file-info">
+                    <strong>{watermark.file.name}</strong>
+                    <span>{watermark.width} × {watermark.height} · {formatBytes(watermark.file.size)}</span>
+                  </div>
+                </>
+              ) : (
+                <>
+                  <span className="watermark-upload-icon">＋</span>
+                  <div>
+                    <strong>上传水印图片</strong>
+                    <p>拖入透明 PNG，或点击选择</p>
+                  </div>
+                </>
+              )}
+            </div>
+            {watermark && <button type="button" className="watermark-remove" onClick={clearWatermark}>移除</button>}
           </div>
 
           <div className="watermark-actions">
@@ -772,19 +939,19 @@ export default function Home() {
 
           <div className="control-block">
             <div className="control-row"><label htmlFor="size">大小</label><output>{settings.size}%</output></div>
-            <input id="size" className="range-input" type="range" min="8" max="90" value={settings.size} onChange={(event) => updateSettings("size", Number(event.target.value))} />
+            <input id="size" className="range-input" type="range" min="8" max="90" value={settings.size} style={rangeStyle(settings.size, 8, 90)} disabled={!activeItem || !watermark} onChange={(event) => updateSettings("size", Number(event.target.value))} />
             <div className="range-hints"><span>小</span><span>大</span></div>
           </div>
 
           <div className="control-block">
             <div className="control-row"><label htmlFor="opacity">透明度</label><output>{settings.opacity}%</output></div>
-            <input id="opacity" className="range-input" type="range" min="10" max="100" value={settings.opacity} onChange={(event) => updateSettings("opacity", Number(event.target.value))} />
+            <input id="opacity" className="range-input" type="range" min="10" max="100" value={settings.opacity} style={rangeStyle(settings.opacity, 10, 100)} disabled={!activeItem || !watermark} onChange={(event) => updateSettings("opacity", Number(event.target.value))} />
             <div className="range-hints"><span>透明</span><span>实色</span></div>
           </div>
 
           <div className="control-block">
             <div className="control-row"><label htmlFor="angle">旋转</label><output>{formatAngle(settings.angle)}</output></div>
-            <input id="angle" className="range-input" type="range" min="-180" max="180" value={settings.angle} onChange={(event) => updateSettings("angle", Number(event.target.value))} />
+            <input id="angle" className="range-input" type="range" min="-180" max="180" value={settings.angle} style={rangeStyle(settings.angle, -180, 180)} disabled={!activeItem || !watermark} onChange={(event) => updateSettings("angle", Number(event.target.value))} />
             <div className="range-hints"><span>−180°</span><span>0°</span><span>+180°</span></div>
           </div>
 
@@ -799,7 +966,7 @@ export default function Home() {
         <div className="editor-panel">
           <div className="editor-toolbar">
             <div className="toolbar-title"><span className="section-kicker">B</span><div><h2>图片预览</h2><p>{items.length ? `${selectedItems.length} / ${items.length} 张已选中` : "还没有图片"}</p></div></div>
-            {items.length > 0 && <button type="button" className="clear-button" onClick={clearAll}>清空全部 <span>×</span></button>}
+            {items.length > 0 && <div className="toolbar-actions"><button type="button" className="select-all-button" onClick={toggleAllItems}>{allItemsSelected ? "取消全选" : "全选"}</button><button type="button" className="clear-button" onClick={clearAll}>清空全部 <span>×</span></button></div>}
           </div>
 
           {items.length === 0 ? (
@@ -846,7 +1013,7 @@ export default function Home() {
               <div className="thumb-strip">
                 {items.map((item, index) => <div key={item.id} className={item.id === activeItem?.id ? "thumb-card is-active" : "thumb-card"}>
                   <button type="button" className="thumb-select" onClick={() => toggleItem(item.id)} aria-label={`${item.selected ? "取消选择" : "选择"} ${item.file.name}`} aria-pressed={item.selected}>{item.selected ? "✓" : ""}</button>
-                  <button type="button" className="thumb-image-button" onClick={() => setActiveId(item.id)}><img src={item.url} alt={`第 ${index + 1} 张：${item.file.name}`} /></button>
+                  <button type="button" className="thumb-image-button" aria-pressed={item.id === activeItem?.id} onClick={() => activateItem(item.id)}><img src={item.url} alt={`第 ${index + 1} 张：${item.file.name}`} /></button>
                   <div className="thumb-meta"><span>{String(index + 1).padStart(2, "0")}</span><button type="button" onClick={() => removeItem(item.id)} aria-label={`移除 ${item.file.name}`}>×</button></div>
                 </div>)}
                 <button type="button" className="add-more-card" onClick={() => fileInputRef.current?.click()}><span>＋</span><small>继续添加 · 可多选</small></button>
@@ -856,8 +1023,24 @@ export default function Home() {
           )}
 
           <div className="editor-footer">
-            <div className="footer-status"><span className="status-icon">↗</span><div><strong>{notice}</strong><small>{items.length ? watermark ? "每张图片独立保存大小、位置和旋转；切换水印会应用到全部图片" : "请先在左侧上传水印图片" : "支持批量上传 · 处理过程无需联网"}</small></div></div>
-            <div className="footer-actions"><button type="button" className="secondary-button" onClick={() => { setItems((current) => current.map((item) => ({ ...item, selected: true }))); showNotice("已选中全部图片"); }} disabled={!items.length}>应用到全部</button><button type="button" className="download-button" onClick={() => void downloadSelected()} disabled={!selectedItems.length || !watermark || isDownloading}><span>{isDownloading ? "导出中…" : "下载全部"}</span><b>↓</b></button></div>
+            {items.length > 0 && watermark && <div className={`mobile-adjust-panel${mobileControlsOpen ? " is-open" : ""}`}>
+              <button type="button" className="mobile-adjust-toggle" aria-expanded={mobileControlsOpen} aria-controls="mobile-watermark-controls" onClick={() => setMobileControlsOpen((current) => !current)}>
+                <span>调整水印</span><output>{Math.round(settings.size)}% · {settings.opacity}% · {formatAngle(settings.angle)}</output><b aria-hidden="true">⌃</b>
+              </button>
+              <div id="mobile-watermark-controls" className="mobile-adjust-controls" hidden={!mobileControlsOpen}>
+                <label htmlFor="mobile-size"><span>大小</span><output>{Math.round(settings.size)}%</output></label>
+                <input id="mobile-size" className="range-input" type="range" min="8" max="90" value={settings.size} style={rangeStyle(settings.size, 8, 90)} onChange={(event) => updateSettings("size", Number(event.target.value))} />
+                <label htmlFor="mobile-opacity"><span>透明度</span><output>{settings.opacity}%</output></label>
+                <input id="mobile-opacity" className="range-input" type="range" min="10" max="100" value={settings.opacity} style={rangeStyle(settings.opacity, 10, 100)} onChange={(event) => updateSettings("opacity", Number(event.target.value))} />
+                <label htmlFor="mobile-angle"><span>旋转</span><output>{formatAngle(settings.angle)}</output></label>
+                <input id="mobile-angle" className="range-input" type="range" min="-180" max="180" value={settings.angle} style={rangeStyle(settings.angle, -180, 180)} onChange={(event) => updateSettings("angle", Number(event.target.value))} />
+              </div>
+            </div>}
+            <div className="footer-status" role="status" aria-live="polite" aria-atomic="true"><span className="status-icon">↗</span><div><strong>{notice}</strong><small>{items.length ? watermark ? "每张图片可独立调整；也可将当前设置应用到全部图片" : "请先上传或选择水印图片" : "支持批量上传 · 处理过程无需联网"}</small></div></div>
+            <div className="footer-export">
+              <label className="zip-option"><input id="export-as-zip" type="checkbox" aria-label="批量导出为 ZIP" checked={exportAsZip} disabled={isDownloading} onChange={(event) => setExportAsZip(event.target.checked)} /><span><strong>批量导出为 ZIP</strong><small>{exportAsZip ? "多张图片合并下载，移动端更稳定" : "关闭后将逐张下载"}</small></span></label>
+              <div className="footer-actions"><button type="button" className="secondary-button" onClick={applyActiveSettingsToAll} disabled={isDownloading || !activeItem || items.length < 2}>应用到全部</button><button type="button" className={`download-button${isDownloading ? " is-cancel" : ""}`} onClick={isDownloading ? cancelExport : () => void downloadSelected()} disabled={!isDownloading && (!selectedItems.length || !watermark)}><span>{isDownloading ? "停止导出" : exportAsZip && selectedItems.length > 1 ? `下载 ZIP (${selectedItems.length})` : `下载已选${selectedItems.length ? ` (${selectedItems.length})` : ""}`}</span><b>{isDownloading ? "×" : "↓"}</b></button></div>
+            </div>
           </div>
         </div>
       </section>
